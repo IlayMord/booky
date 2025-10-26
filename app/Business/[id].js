@@ -567,6 +567,35 @@ const styles = StyleSheet.create({
     color: "#666",
     textAlign: "right",
   },
+  hoursContainerBox: {
+    marginTop: 12,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+  },
+  hoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  hoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  hoursDay: {
+    color: "#555",
+    fontWeight: "600",
+  },
+  hoursValue: {
+    color: "#333",
+    fontWeight: "700",
+  },
+  hoursFallback: {
+    color: "#666",
+    textAlign: "right",
+  },
   section: {
     marginTop: 20,
   },
@@ -618,6 +647,17 @@ const styles = StyleSheet.create({
   },
   dateDisabledText: {
     color: "#b5b8c9",
+  },
+  selectedBtn: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  dateText: {
+    color: "#333",
+    fontWeight: "600",
+  },
+  selectedDateText: {
+    color: "#fff",
   },
   hoursContainer: {
     flexDirection: "row-reverse",
