@@ -71,7 +71,7 @@ export default function HomeClient() {
       );
     }
     setFiltered(results);
-  }, [search, selectedCategory]);
+  }, [businesses, search, selectedCategory]);
 
   if (loading)
     return (
