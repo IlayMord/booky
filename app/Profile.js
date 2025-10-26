@@ -13,7 +13,6 @@ import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
-    I18nManager,
     Image,
     ScrollView,
     StyleSheet,
@@ -24,8 +23,6 @@ import {
 } from "react-native";
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { auth, db } from "../firebaseConfig";
-
-I18nManager.forceRTL(true);
 
 export default function Profile() {
   const [userData, setUserData] = useState({});
