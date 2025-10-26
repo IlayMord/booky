@@ -98,6 +98,29 @@ export default function HomeClient() {
       }
     });
 
+      const fallback = user.displayName?.trim();
+      if (fallback && isMounted) {
+        setUserName(fallback.split(" ")[0]);
+      } else if (isMounted && user.email) {
+        setUserName(user.email.split("@")[0]);
+      }
+
+      try {
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        const fullName =
+          data.fullName || data.name || data.firstName || data.displayName;
+        if (fullName && isMounted) {
+          setUserName(fullName.split(" ")[0]);
+        }
+      } catch (error) {
+        console.error("❌ שגיאה בשליפת משתמש:", error);
+      }
+    };
+
+    hydrateUserName();
     fetchBusinesses();
 
     return () => {
