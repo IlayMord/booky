@@ -67,6 +67,100 @@ export const sanitizeWeeklyHours = (value) => {
   return base;
 };
 
+const isDefinedScheduleText = (text) => {
+  const normalized = (text || "").trim();
+  return Boolean(
+    normalized && normalized !== "לא הוגדר" && normalized !== "-"
+  );
+};
+
+export const buildWeeklyHoursRows = (weeklyHours) =>
+  WEEK_DAYS.map((day, index) => {
+    const schedule = weeklyHours?.[day.key];
+    if (!schedule) {
+      return { ...day, index, text: "לא הוגדר" };
+    }
+
+    if (schedule.closed) {
+      return { ...day, index, text: "סגור" };
+    }
+
+    const open = typeof schedule.open === "string" ? schedule.open.trim() : "";
+    const close =
+      typeof schedule.close === "string" ? schedule.close.trim() : "";
+
+    if (!open || !close) {
+      return { ...day, index, text: "-" };
+    }
+
+    return { ...day, index, text: `${open} – ${close}` };
+  });
+
+export const summarizeWeeklyHoursRows = (rows = []) => {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  const groups = [];
+
+  rows.forEach((row, idx) => {
+    if (!row) {
+      return;
+    }
+
+    const normalizedText = (row.text || "").trim() || "-";
+    const groupable = isDefinedScheduleText(normalizedText);
+    const lastGroup = groups[groups.length - 1];
+    const rowIndex = typeof row.index === "number" ? row.index : idx;
+
+    if (
+      lastGroup &&
+      lastGroup.text === normalizedText &&
+      lastGroup.groupable === groupable &&
+      lastGroup.lastIndex === rowIndex - 1
+    ) {
+      lastGroup.lastIndex = rowIndex;
+      lastGroup.days.push(row);
+      return;
+    }
+
+    groups.push({
+      text: normalizedText,
+      groupable,
+      firstIndex: rowIndex,
+      lastIndex: rowIndex,
+      days: [row],
+    });
+  });
+
+  return groups.map((group) => {
+    const days = group.days.filter(Boolean);
+    if (!days.length) {
+      return {
+        key: String(group.firstIndex),
+        label: "",
+        text: group.text,
+      };
+    }
+
+    const first = days[0];
+    const last = days[days.length - 1];
+    const label =
+      days.length === 1 || !group.groupable
+        ? first.label
+        : `${first.label} – ${last.label}`;
+
+    return {
+      key: days.map((day) => day.key).join("-"),
+      label,
+      text: group.text,
+    };
+  });
+};
+
+export const getWeeklyHoursSummary = (weeklyHours) =>
+  summarizeWeeklyHoursRows(buildWeeklyHoursRows(weeklyHours));
+
 export const getWeekdayKeyFromDate = (dateInput) => {
   if (!dateInput) return null;
 

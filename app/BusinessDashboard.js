@@ -9,7 +9,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,7 +24,10 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
-import { WEEK_DAYS } from "../constants/weekdays";
+import {
+  buildWeeklyHoursRows,
+  summarizeWeeklyHoursRows,
+} from "../constants/weekdays";
 
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
@@ -104,27 +107,23 @@ export default function BusinessDashboard() {
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
 
-  const hasWeeklyHours = Boolean(
-    business?.weeklyHours &&
-      WEEK_DAYS.some((day) => {
-        const schedule = business.weeklyHours[day.key];
-        return schedule && !schedule.closed && schedule.open && schedule.close;
-      })
+  const weeklyHoursRows = useMemo(
+    () => buildWeeklyHoursRows(business?.weeklyHours),
+    [business?.weeklyHours]
   );
 
-  const weeklyHoursRows = WEEK_DAYS.map((day) => {
-    const schedule = business?.weeklyHours?.[day.key];
-    if (!schedule) {
-      return { ...day, text: "לא הוגדר" };
-    }
-    if (schedule.closed) {
-      return { ...day, text: "סגור" };
-    }
-    if (!schedule.open || !schedule.close) {
-      return { ...day, text: "-" };
-    }
-    return { ...day, text: `${schedule.open} – ${schedule.close}` };
-  });
+  const hasWeeklyHours = useMemo(
+    () =>
+      weeklyHoursRows.some(
+        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
+      ),
+    [weeklyHoursRows]
+  );
+
+  const condensedWeeklyHours = useMemo(
+    () => summarizeWeeklyHoursRows(weeklyHoursRows),
+    [weeklyHoursRows]
+  );
 
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
@@ -270,7 +269,7 @@ export default function BusinessDashboard() {
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
+              condensedWeeklyHours.map((row) => (
                 <View key={row.key} style={styles.weeklyHoursRow}>
                   <Text style={styles.weeklyHoursDay}>{row.label}</Text>
                   <Text style={styles.weeklyHoursValue}>{row.text}</Text>

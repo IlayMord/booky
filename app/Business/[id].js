@@ -23,7 +23,12 @@ import {
   View,
 } from "react-native";
 import { auth, db } from "../../firebaseConfig";
-import { WEEK_DAYS, getWeekdayKeyFromDate } from "../../constants/weekdays";
+import {
+  WEEK_DAYS,
+  buildWeeklyHoursRows,
+  getWeekdayKeyFromDate,
+  summarizeWeeklyHoursRows,
+} from "../../constants/weekdays";
 
 const clampBookingWindow = (value) => {
   const parsed = Number(value);
@@ -195,27 +200,23 @@ export default function BusinessPage() {
     );
   }, [bookingIntervalMinutes, business, selectedDate]);
 
-  const hasWeeklyHours = Boolean(
-    business?.weeklyHours &&
-      WEEK_DAYS.some((day) => {
-        const schedule = business.weeklyHours[day.key];
-        return schedule && !schedule.closed && schedule.open && schedule.close;
-      })
+  const weeklyHoursRows = useMemo(
+    () => buildWeeklyHoursRows(business?.weeklyHours),
+    [business?.weeklyHours]
   );
 
-  const weeklyHoursRows = WEEK_DAYS.map((day) => {
-    const schedule = business?.weeklyHours?.[day.key];
-    if (!schedule) {
-      return { ...day, text: "לא הוגדר" };
-    }
-    if (schedule.closed) {
-      return { ...day, text: "סגור" };
-    }
-    if (!schedule.open || !schedule.close) {
-      return { ...day, text: "-" };
-    }
-    return { ...day, text: `${schedule.open} – ${schedule.close}` };
-  });
+  const hasWeeklyHours = useMemo(
+    () =>
+      weeklyHoursRows.some(
+        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
+      ),
+    [weeklyHoursRows]
+  );
+
+  const condensedWeeklyHours = useMemo(
+    () => summarizeWeeklyHoursRows(weeklyHoursRows),
+    [weeklyHoursRows]
+  );
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
   useEffect(() => {
@@ -434,14 +435,10 @@ export default function BusinessPage() {
           </TouchableOpacity>
         </View>
       ) : null}
-      <View style={styles.infoRow}>
-        <Text style={styles.infoValue}>{business.phone || "לא צויין"}</Text>
-        <Ionicons name="call-outline" size={18} color="#6C63FF" />
-      </View>
       <View style={styles.hoursContainerBox}>
         <Text style={styles.hoursTitle}>🕒 שעות פעילות</Text>
         {hasWeeklyHours ? (
-          weeklyHoursRows.map((row) => (
+          condensedWeeklyHours.map((row) => (
             <View key={row.key} style={styles.hoursRow}>
               <Text style={styles.hoursDay}>{row.label}</Text>
               <Text style={styles.hoursValue}>{row.text}</Text>
@@ -675,8 +672,8 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   dateScroll: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
+    flexDirection: "row-reverse",
+    justifyContent: "flex-start",
     gap: 12,
     paddingHorizontal: 4,
   },
