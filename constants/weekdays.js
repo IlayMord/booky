@@ -74,6 +74,18 @@ const isDefinedScheduleText = (text) => {
   );
 };
 
+const dedupeWeeklyHourRows = (rows = []) => {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const signature = `${row?.label ?? ""}|${row?.text ?? ""}`;
+    if (seen.has(signature)) {
+      return false;
+    }
+    seen.add(signature);
+    return true;
+  });
+};
+
 export const buildWeeklyHoursRows = (weeklyHours) =>
   WEEK_DAYS.map((day, index) => {
     const schedule = weeklyHours?.[day.key];
@@ -160,6 +172,14 @@ export const summarizeWeeklyHoursRows = (rows = []) => {
 
 export const getWeeklyHoursSummary = (weeklyHours) =>
   summarizeWeeklyHoursRows(buildWeeklyHoursRows(weeklyHours));
+
+export const getDisplayWeeklyHoursRows = (weeklyHours) => {
+  const summary = summarizeWeeklyHoursRows(buildWeeklyHoursRows(weeklyHours));
+  const filtered = summary.filter((row) =>
+    isDefinedScheduleText(row?.text) || row?.text === "סגור"
+  );
+  return dedupeWeeklyHourRows(filtered);
+};
 
 export const getWeekdayKeyFromDate = (dateInput) => {
   if (!dateInput) return null;

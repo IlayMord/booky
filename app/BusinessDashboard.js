@@ -24,10 +24,7 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
-import {
-  buildWeeklyHoursRows,
-  summarizeWeeklyHoursRows,
-} from "../constants/weekdays";
+import { getDisplayWeeklyHoursRows } from "../constants/weekdays";
 
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
@@ -107,38 +104,12 @@ export default function BusinessDashboard() {
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
 
-  const weeklyHoursRows = useMemo(
-    () => buildWeeklyHoursRows(business?.weeklyHours),
+  const displayWeeklyHours = useMemo(
+    () => getDisplayWeeklyHoursRows(business?.weeklyHours),
     [business?.weeklyHours]
   );
 
-  const condensedWeeklyHours = useMemo(
-    () => summarizeWeeklyHoursRows(weeklyHoursRows),
-    [weeklyHoursRows]
-  );
-
-  const dedupedWeeklyHours = useMemo(() => {
-    const seen = new Set();
-    return condensedWeeklyHours.filter((row) => {
-      if (!row?.text) {
-        return false;
-      }
-      const signature = `${row.label ?? ""}|${row.text}`;
-      if (seen.has(signature)) {
-        return false;
-      }
-      seen.add(signature);
-      return true;
-    });
-  }, [condensedWeeklyHours]);
-
-  const hasWeeklyHours = useMemo(
-    () =>
-      dedupedWeeklyHours.some(
-        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
-      ),
-    [dedupedWeeklyHours]
-  );
+  const hasWeeklyHours = displayWeeklyHours.length > 0;
 
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
@@ -194,78 +165,6 @@ export default function BusinessDashboard() {
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
-                <View key={row.key} style={styles.weeklyHoursRow}>
-                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
-                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.weeklyHoursFallback}>
-                {business?.hours || "לא צוינו שעות פעילות"}
-              </Text>
-            )}
-          </View>
-          <Text style={styles.businessInfo}>
-            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
-          </Text>
-          <View style={styles.weeklyHoursContainer}>
-            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
-            {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
-                <View key={row.key} style={styles.weeklyHoursRow}>
-                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
-                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.weeklyHoursFallback}>
-                {business?.hours || "לא צוינו שעות פעילות"}
-              </Text>
-            )}
-          </View>
-          <Text style={styles.businessInfo}>
-            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
-          </Text>
-          <View style={styles.weeklyHoursContainer}>
-            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
-            {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
-                <View key={row.key} style={styles.weeklyHoursRow}>
-                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
-                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.weeklyHoursFallback}>
-                {business?.hours || "לא צוינו שעות פעילות"}
-              </Text>
-            )}
-          </View>
-          <Text style={styles.businessInfo}>
-            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
-          </Text>
-          <View style={styles.weeklyHoursContainer}>
-            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
-            {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
-                <View key={row.key} style={styles.weeklyHoursRow}>
-                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
-                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
-                </View>
-              ))
-            ) : (
-              <Text style={styles.weeklyHoursFallback}>
-                {business?.hours || "לא צוינו שעות פעילות"}
-              </Text>
-            )}
-          </View>
-          <Text style={styles.businessInfo}>
-            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
-          </Text>
-          <View style={styles.weeklyHoursContainer}>
-            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
-            {hasWeeklyHours ? (
               condensedWeeklyHours.map((row) => (
                 <View key={row.key} style={styles.weeklyHoursRow}>
                   <Text style={styles.weeklyHoursDay}>{row.label}</Text>
@@ -285,6 +184,24 @@ export default function BusinessDashboard() {
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
               dedupedWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
                 <View key={row.key} style={styles.weeklyHoursRow}>
                   <Text style={styles.weeklyHoursDay}>{row.label}</Text>
                   <Text style={styles.weeklyHoursValue}>{row.text}</Text>
@@ -425,17 +342,20 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   weeklyHoursRow: {
-    flexDirection: "row",
+    flexDirection: "row-reverse",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 12,
   },
   weeklyHoursDay: {
     color: "#555",
     fontWeight: "600",
+    textAlign: "right",
   },
   weeklyHoursValue: {
     color: "#333",
     fontWeight: "700",
+    textAlign: "left",
   },
   weeklyHoursFallback: {
     color: "#666",
