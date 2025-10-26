@@ -9,7 +9,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,6 +24,17 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  getDisplayWeeklyHoursRows,
+  sanitizeWeeklyHours,
+} from "../constants/weekdays";
+
+const clampBookingInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  const rounded = Math.round(parsed);
+  return Math.min(Math.max(rounded, 5), 180);
+};
 
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
@@ -32,6 +43,8 @@ export default function BusinessDashboard() {
     new Date().toISOString().split("T")[0]
   );
   const [loading, setLoading] = useState(true);
+  const [sectionPositions, setSectionPositions] = useState({});
+  const scrollRef = useRef(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -48,7 +61,19 @@ export default function BusinessDashboard() {
         const snap = await getDoc(ref);
 
         if (snap.exists()) {
-          setBusiness({ id: snap.id, ...snap.data() });
+          const rawData = snap.data() || {};
+          const normalizedWeeklyHours = sanitizeWeeklyHours(
+            rawData.weeklyHours ?? rawData.condensedWeeklyHours
+          );
+          const businessData = { ...rawData };
+          delete businessData.weeklyHours;
+          delete businessData.condensedWeeklyHours;
+
+          setBusiness({
+            id: snap.id,
+            ...businessData,
+            weeklyHours: normalizedWeeklyHours,
+          });
           await fetchBookings(user.uid);
         } else {
           Alert.alert("לא נמצא עסק", "צור אחד בעריכת פרופיל.");
@@ -61,7 +86,7 @@ export default function BusinessDashboard() {
       }
     };
     fetchBusinessData();
-  }, []);
+  }, [router]);
 
   const fetchBookings = async (businessId) => {
     try {
@@ -96,6 +121,25 @@ export default function BusinessDashboard() {
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
 
+  const displayWeeklyHours = useMemo(() => {
+    if (!business?.weeklyHours) {
+      return [];
+    }
+    return getDisplayWeeklyHoursRows(business.weeklyHours);
+  }, [business?.weeklyHours]);
+
+  const hasWeeklyHours = displayWeeklyHours.length > 0;
+
+  const legacyHoursFallback = useMemo(() => {
+    if (Array.isArray(business?.hours)) {
+      return business.hours.join("\n");
+    }
+    if (typeof business?.hours === "string") {
+      return business.hours;
+    }
+    return "לא צוינו שעות פעילות";
+  }, [business?.hours]);
+
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
   bookings.forEach((b) => {
@@ -107,16 +151,71 @@ export default function BusinessDashboard() {
     datasets: [{ data: Object.values(monthlyStats) }],
   };
 
+  const bookingWindowDays = (() => {
+    const parsed = Number(business?.bookingWindowDays);
+    if (!Number.isFinite(parsed)) return 30;
+    return Math.min(Math.max(Math.round(parsed), 1), 90);
+  })();
+
+  const bookingIntervalMinutes = clampBookingInterval(
+    business?.bookingIntervalMinutes
+  );
+
+  const handleSectionLayout = (key) => (event) => {
+    const { y } = event.nativeEvent.layout;
+    setSectionPositions((prev) => ({ ...prev, [key]: y }));
+  };
+
+  const scrollToSection = (key) => {
+    const y = sectionPositions[key];
+    if (scrollRef.current && typeof y === "number") {
+      scrollRef.current.scrollTo({ y: Math.max(y - 20, 0), animated: true });
+    }
+  };
+
+  const quickCategories = [
+    {
+      key: "overview",
+      label: "סקירה",
+      icon: "home-outline",
+      description: "פרטי העסק והגדרות",
+      onPress: () => scrollToSection("overview"),
+    },
+    {
+      key: "stats",
+      label: "סטטיסטיקות",
+      icon: "bar-chart-outline",
+      description: "התפלגות תורים",
+      onPress: () => scrollToSection("stats"),
+    },
+    {
+      key: "calendar",
+      label: "יומן",
+      icon: "calendar-outline",
+      description: "בחירת יום ותורים",
+      onPress: () => scrollToSection("calendar"),
+    },
+    {
+      key: "profile",
+      label: "עריכת עסק",
+      icon: "settings-outline",
+      description: "שינוי פרטים",
+      onPress: () => router.push("/BusinessProfileEdit"),
+    },
+  ];
+
   if (loading)
     return (
-      <SafeAreaView style={styles.center}>
-        <ActivityIndicator size="large" color="#6C63FF" />
-        <Text>טוען נתונים...</Text>
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#6C63FF" />
+          <Text>טוען נתונים...</Text>
+        </View>
       </SafeAreaView>
     );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.safeArea}>
       {/* ===== HEADER ===== */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.replace("/Login")}>
@@ -128,26 +227,77 @@ export default function BusinessDashboard() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* ===== כרטיס עסק ===== */}
-        <View style={styles.businessCard}>
-          <Text style={styles.businessName}>{business?.name}</Text>
-          <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
-          <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
-          <Text style={styles.businessInfo}>
-            🕒 {business?.hours || "לא צוין"}
-          </Text>
-          <Text style={styles.businessInfo}>
-            🧾 אישור אוטומטי: {business?.autoApprove ? "כן" : "לא"}
-          </Text>
+      <View style={styles.body}>
+        <View style={styles.categoryRow}>
+          {quickCategories.map((category) => (
+            <TouchableOpacity
+              key={category.key}
+              style={styles.categoryCard}
+              onPress={category.onPress}
+              activeOpacity={0.8}
+            >
+              <View style={styles.categoryIconWrap}>
+                <Ionicons
+                  name={category.icon}
+                  size={22}
+                  color="#6C63FF"
+                />
+              </View>
+              <Text style={styles.categoryLabel}>{category.label}</Text>
+              <Text style={styles.categoryDescription} numberOfLines={2}>
+                {category.description}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
 
-        {/* ===== 🔹 כרטיסי סטטיסטיקה ===== */}
-        <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: "#6C63FF" }]}>
-            <Text style={styles.statNum}>{total}</Text>
-            <Text style={styles.statLabel}>סה״כ תורים</Text>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ===== כרטיס עסק ===== */}
+          <View style={styles.businessCard} onLayout={handleSectionLayout("overview")}>
+            <Text style={styles.businessName}>{business?.name}</Text>
+            <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
+            <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
+            <View style={styles.scheduleSettings}>
+              <Text style={styles.businessInfo}>
+              🗓️ פתיחת יומן: {bookingWindowDays} ימים קדימה
+            </Text>
+            <Text style={styles.businessInfo}>
+              🧾 אישור אוטומטי: {business?.autoApprove ? "כן" : "לא"}
+            </Text>
+            <Text style={styles.businessInfo}>
+              ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+            </Text>
           </View>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {legacyHoursFallback}
+              </Text>
+            )}
+          </View>
+        </View>
+
+          {/* ===== 🔹 כרטיסי סטטיסטיקה ===== */}
+          <View
+            style={styles.statsRow}
+            onLayout={handleSectionLayout("stats")}
+          >
+            <View style={[styles.statCard, { backgroundColor: "#6C63FF" }]}>
+              <Text style={styles.statNum}>{total}</Text>
+              <Text style={styles.statLabel}>סה״כ תורים</Text>
+            </View>
           <View style={[styles.statCard, { backgroundColor: "#4CAF50" }]}>
             <Text style={styles.statNum}>{approved}</Text>
             <Text style={styles.statLabel}>מאושרים</Text>
@@ -162,77 +312,87 @@ export default function BusinessDashboard() {
           </View>
         </View>
 
-        {/* ===== 🔹 גרף הזמנות ===== */}
-        {Object.keys(monthlyStats).length > 0 && (
-          <View style={styles.chartBox}>
-            <Text style={styles.chartTitle}>📊 הזמנות לפי חודש</Text>
-            <BarChart
-              data={chartData}
-              width={Dimensions.get("window").width - 40}
-              height={250}
-              chartConfig={{
-                backgroundGradientFrom: "#f5f7fa",
-                backgroundGradientTo: "#f5f7fa",
-                color: (opacity = 1) => `rgba(108, 99, 255, ${opacity})`,
-                labelColor: () => "#333",
-                decimalPlaces: 0,
-              }}
-              style={{ borderRadius: 16 }}
-            />
-          </View>
-        )}
-
-        {/* ===== לוח שנה ותורים ===== */}
-        <Calendar
-          onDayPress={(day) => setSelectedDate(day.dateString)}
-          markedDates={{
-            [selectedDate]: { selected: true, selectedColor: "#6C63FF" },
-          }}
-          theme={{ textDirection: "rtl", arrowColor: "#6C63FF" }}
-          style={styles.calendar}
-        />
-
-        <Text style={styles.sectionTitle}>
-          תורים ליום {selectedDate.split("-").reverse().join(".")}
-        </Text>
-
-        {dailyBookings.length === 0 ? (
-          <Text style={styles.noBookings}>אין תורים ליום זה</Text>
-        ) : (
-          dailyBookings.map((b) => (
-            <View key={b.id} style={styles.bookingCard}>
-              <Text style={styles.bookingTime}>
-                ⏰ {b.time} — {b.userName || "לקוח"}
-              </Text>
-              <Text style={styles.bookingDetail}>📞 {b.userPhone || "-"}</Text>
-              <Text style={styles.bookingDetail}>סטטוס: {b.status}</Text>
-
-              {b.status === "pending" && (
-                <View style={styles.row}>
-                  <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: "#6C63FF" }]}
-                    onPress={() => updateStatus(b.id, "approved")}
-                  >
-                    <Text style={styles.actionText}>אשר</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: "#ff4d4d" }]}
-                    onPress={() => updateStatus(b.id, "cancelled")}
-                  >
-                    <Text style={styles.actionText}>בטל</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+          {/* ===== 🔹 גרף הזמנות ===== */}
+          {Object.keys(monthlyStats).length > 0 && (
+            <View style={styles.chartBox} onLayout={handleSectionLayout("statsChart")}>
+              <Text style={styles.chartTitle}>📊 הזמנות לפי חודש</Text>
+              <BarChart
+                data={chartData}
+                width={Dimensions.get("window").width - 60}
+                height={250}
+                chartConfig={{
+                  backgroundGradientFrom: "#f5f7fa",
+                  backgroundGradientTo: "#f5f7fa",
+                  color: (opacity = 1) => `rgba(108, 99, 255, ${opacity})`,
+                  labelColor: () => "#333",
+                  decimalPlaces: 0,
+                }}
+                style={{ borderRadius: 16 }}
+              />
             </View>
-          ))
-        )}
-      </ScrollView>
+          )}
+
+          {/* ===== לוח שנה ותורים ===== */}
+          <View onLayout={handleSectionLayout("calendar")}>
+            <Calendar
+              onDayPress={(day) => setSelectedDate(day.dateString)}
+              markedDates={{
+                [selectedDate]: { selected: true, selectedColor: "#6C63FF" },
+              }}
+              theme={{ textDirection: "rtl", arrowColor: "#6C63FF" }}
+              style={styles.calendar}
+            />
+
+            <Text style={styles.sectionTitle}>
+              תורים ליום {selectedDate.split("-").reverse().join(".")}
+            </Text>
+
+            {dailyBookings.length === 0 ? (
+              <Text style={styles.noBookings}>אין תורים ליום זה</Text>
+            ) : (
+              dailyBookings.map((b) => (
+                <View key={b.id} style={styles.bookingCard}>
+                  <Text style={styles.bookingTime}>
+                    ⏰ {b.time} — {b.userName || "לקוח"}
+                  </Text>
+                  <Text style={styles.bookingDetail}>📞 {b.userPhone || "-"}</Text>
+                  <Text style={styles.bookingDetail}>סטטוס: {b.status}</Text>
+
+                  {b.status === "pending" && (
+                    <View style={styles.row}>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: "#6C63FF" }]}
+                        onPress={() => updateStatus(b.id, "approved")}
+                      >
+                        <Text style={styles.actionText}>אשר</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: "#ff4d4d" }]}
+                        onPress={() => updateStatus(b.id, "cancelled")}
+                      >
+                        <Text style={styles.actionText}>בטל</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              ))
+            )}
+          </View>
+        </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f7fa" },
+  safeArea: { flex: 1, backgroundColor: "#6C63FF" },
+  body: {
+    flex: 1,
+    backgroundColor: "#f5f7fa",
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingTop: 24,
+  },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
     backgroundColor: "#6C63FF",
@@ -240,31 +400,110 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingTop: 50,
-    paddingBottom: 15,
+    paddingTop: 20,
+    paddingBottom: 24,
   },
   headerTitle: { fontSize: 20, fontWeight: "800", color: "#fff" },
-  content: { padding: 20 },
+  content: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    gap: 18,
+  },
+  categoryRow: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginBottom: 16,
+    gap: 12,
+  },
+  categoryCard: {
+    width: "47%",
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: "flex-end",
+    shadowColor: "#1a237e",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    gap: 6,
+  },
+  categoryIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "#f1f0ff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 2,
+  },
+  categoryLabel: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#333",
+  },
+  categoryDescription: {
+    fontSize: 12,
+    color: "#666",
+    textAlign: "right",
+  },
   businessCard: {
     backgroundColor: "#fff",
     borderRadius: 20,
     padding: 20,
-    marginBottom: 15,
   },
   businessName: { fontSize: 22, fontWeight: "900", textAlign: "right" },
   businessInfo: { textAlign: "right", color: "#555", fontSize: 14 },
+  scheduleSettings: {
+    marginTop: 8,
+    gap: 4,
+  },
+  weeklyHoursContainer: {
+    marginTop: 10,
+    backgroundColor: "#f6f7fc",
+    borderRadius: 14,
+    padding: 12,
+    gap: 6,
+  },
+  weeklyHoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  weeklyHoursRow: {
+    flexDirection: "row-reverse",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  weeklyHoursDay: {
+    color: "#555",
+    fontWeight: "600",
+    textAlign: "right",
+  },
+  weeklyHoursValue: {
+    color: "#333",
+    fontWeight: "700",
+    textAlign: "left",
+  },
+  weeklyHoursFallback: {
+    color: "#666",
+    textAlign: "right",
+  },
   statsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
-    marginBottom: 15,
+    gap: 12,
   },
   statCard: {
     width: "47%",
     borderRadius: 15,
     padding: 15,
     alignItems: "center",
-    marginBottom: 10,
   },
   statNum: { fontSize: 22, fontWeight: "900", color: "#fff" },
   statLabel: { fontSize: 14, color: "#fff" },
@@ -272,14 +511,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 15,
     padding: 15,
-    marginBottom: 20,
   },
   chartTitle: { fontWeight: "700", fontSize: 16, marginBottom: 10, textAlign: "right" },
   calendar: { borderRadius: 15, marginBottom: 15 },
   sectionTitle: {
     fontWeight: "800",
     fontSize: 18,
-    marginVertical: 10,
+    marginBottom: 10,
     textAlign: "right",
   },
   bookingCard: {
