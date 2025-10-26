@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -30,12 +30,15 @@ export default function HomeClient() {
 
   // ✅ שליפת עסקים מ-Firestore
   useEffect(() => {
+    let isMounted = true;
+
     const fetchBusinesses = async () => {
       try {
         const querySnap = await getDocs(collection(db, "businesses"));
-        const data = querySnap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
+        if (!isMounted) return;
+        const data = querySnap.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
         }));
         setBusinesses(data);
         setFiltered(data);
@@ -44,17 +47,47 @@ export default function HomeClient() {
       } catch (error) {
         console.error("❌ שגיאה בשליפת עסקים:", error);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
-    // שם המשתמש
-    const user = auth.currentUser;
-    if (user) {
-      setUserName(user.displayName?.split(" ")[0] || "משתמש");
-    }
+    const hydrateUserName = async () => {
+      const user = auth.currentUser;
+      if (!user) {
+        if (isMounted) setUserName("משתמש");
+        return;
+      }
 
+      const fallback = user.displayName?.trim();
+      if (fallback && isMounted) {
+        setUserName(fallback.split(" ")[0]);
+      } else if (isMounted && user.email) {
+        setUserName(user.email.split("@")[0]);
+      }
+
+      try {
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        const fullName =
+          data.fullName || data.name || data.firstName || data.displayName;
+        if (fullName && isMounted) {
+          setUserName(fullName.split(" ")[0]);
+        }
+      } catch (error) {
+        console.error("❌ שגיאה בשליפת משתמש:", error);
+      }
+    };
+
+    hydrateUserName();
     fetchBusinesses();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
@@ -246,22 +279,37 @@ const styles = StyleSheet.create({
   /* CATEGORIES */
   categoriesContainer: {
     flexDirection: "row-reverse",
-    paddingVertical: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+    paddingLeft: 4,
   },
   categoryBtn: {
-    backgroundColor: "#eee",
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    marginLeft: 8,
+    backgroundColor: "#ffffff",
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    marginHorizontal: 6,
+    borderWidth: 1,
+    borderColor: "#e0e3ef",
+    minWidth: 80,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
   },
   categorySelected: {
     backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   categoryText: {
     color: "#3e3e63",
-    fontWeight: "600",
-    fontSize: 14,
+    fontWeight: "700",
+    fontSize: 15,
   },
   categoryTextSelected: {
     color: "#fff",

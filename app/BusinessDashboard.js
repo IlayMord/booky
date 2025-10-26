@@ -26,6 +26,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
 import { WEEK_DAYS } from "../constants/weekdays";
 
+const clampBookingInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  const rounded = Math.round(parsed);
+  return Math.min(Math.max(rounded, 5), 180);
+};
+
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
   const [bookings, setBookings] = useState([]);
@@ -136,6 +143,10 @@ export default function BusinessDashboard() {
     return Math.min(Math.max(Math.round(parsed), 1), 90);
   })();
 
+  const bookingIntervalMinutes = clampBookingInterval(
+    business?.bookingIntervalMinutes
+  );
+
   if (loading)
     return (
       <SafeAreaView style={styles.center}>
@@ -165,6 +176,24 @@ export default function BusinessDashboard() {
           <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
           <Text style={styles.businessInfo}>
             🗓️ פתיחת יומן: {bookingWindowDays} ימים קדימה
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              weeklyHoursRows.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
           </Text>
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>

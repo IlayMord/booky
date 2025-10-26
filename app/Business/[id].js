@@ -30,6 +30,13 @@ const clampBookingWindow = (value) => {
   return Math.min(Math.max(Math.round(parsed), 1), 90);
 };
 
+const clampSlotInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  const rounded = Math.round(parsed);
+  return Math.min(Math.max(rounded, 5), 180);
+};
+
 const parseTimeToMinutes = (time) => {
   if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
   const [hours, minutes] = time.split(":").map(Number);
@@ -45,12 +52,19 @@ const formatMinutesToTime = (value) => {
 const generateTimeSlots = (from, to, step = 30) => {
   const start = parseTimeToMinutes(from);
   const end = parseTimeToMinutes(to);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+  const normalizedStep = Number(step);
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    !Number.isFinite(normalizedStep) ||
+    start >= end ||
+    normalizedStep <= 0
+  ) {
     return [];
   }
 
   const slots = [];
-  for (let minutes = start; minutes < end; minutes += step) {
+  for (let minutes = start; minutes + normalizedStep <= end; minutes += normalizedStep) {
     slots.push(formatMinutesToTime(minutes));
   }
   return slots;
@@ -123,6 +137,11 @@ export default function BusinessPage() {
     [business?.bookingWindowDays]
   );
 
+  const bookingIntervalMinutes = useMemo(
+    () => clampSlotInterval(business?.bookingIntervalMinutes),
+    [business?.bookingIntervalMinutes]
+  );
+
   const dateOptions = useMemo(() => {
     if (!business) return [];
 
@@ -143,10 +162,14 @@ export default function BusinessPage() {
         weekdayShort: labels.short,
         disabled:
           !window ||
-          generateTimeSlots(window.opening, window.closing).length === 0,
+          generateTimeSlots(
+            window.opening,
+            window.closing,
+            bookingIntervalMinutes
+          ).length === 0,
       };
     });
-  }, [bookingWindowLimit, business]);
+  }, [bookingIntervalMinutes, bookingWindowLimit, business]);
 
   const hasAvailableDates = useMemo(
     () => dateOptions.some((option) => !option.disabled),
@@ -164,8 +187,12 @@ export default function BusinessPage() {
       return [];
     }
 
-    return generateTimeSlots(window.opening, window.closing);
-  }, [business, selectedDate]);
+    return generateTimeSlots(
+      window.opening,
+      window.closing,
+      bookingIntervalMinutes
+    );
+  }, [bookingIntervalMinutes, business, selectedDate]);
 
   const hasWeeklyHours = Boolean(
     business?.weeklyHours &&

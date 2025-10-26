@@ -30,6 +30,18 @@ import {
 } from "../constants/weekdays";
 
 const BOOKING_WINDOW_PRESETS = [7, 14, 21, 30];
+const BOOKING_INTERVAL_PRESETS = [10, 15, 20, 30, 45, 60];
+
+const sanitizeBookingInterval = (value, fallback = 30) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  const rounded = Math.round(parsed);
+  const clamped = Math.min(Math.max(rounded, 5), 180);
+  return clamped;
+};
 
 const timeToMinutes = (time) => {
   if (!/^\d{2}:\d{2}$/.test(time)) return NaN;
@@ -54,6 +66,8 @@ export default function BusinessProfileEdit() {
   const [iosPickerValue, setIosPickerValue] = useState(new Date());
   const [bookingWindowDays, setBookingWindowDays] = useState(30);
   const [bookingWindowInput, setBookingWindowInput] = useState("30");
+  const [bookingIntervalMinutes, setBookingIntervalMinutes] = useState(30);
+  const [bookingIntervalInput, setBookingIntervalInput] = useState("30");
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -122,6 +136,12 @@ export default function BusinessProfileEdit() {
             : 30;
           setBookingWindowDays(sanitizedWindow);
           setBookingWindowInput(String(sanitizedWindow));
+
+          const sanitizedInterval = sanitizeBookingInterval(
+            data.bookingIntervalMinutes
+          );
+          setBookingIntervalMinutes(sanitizedInterval);
+          setBookingIntervalInput(String(sanitizedInterval));
         }
       } catch (err) {
         console.error("שגיאה בשליפת נתוני עסק:", err);
@@ -245,6 +265,12 @@ export default function BusinessProfileEdit() {
       errors.push("ניתן להגדיר עד 90 ימים קדימה לפתיחת יומן התורים");
     }
 
+    if (!Number.isInteger(bookingIntervalMinutes) || bookingIntervalMinutes < 5) {
+      errors.push("יש להזין מרווח זמנים תקין בין 5 ל-180 דקות");
+    } else if (bookingIntervalMinutes > 180) {
+      errors.push("ניתן להגדיר מרווח זמנים עד 180 דקות");
+    }
+
     if (errors.length) {
       Alert.alert("שגיאה", errors[0]);
       return;
@@ -284,6 +310,10 @@ export default function BusinessProfileEdit() {
         autoApprove: business.autoApprove,
         weeklyHours: validatedWeekly,
         bookingWindowDays,
+        bookingIntervalMinutes: sanitizeBookingInterval(
+          bookingIntervalMinutes,
+          30
+        ),
         ownerId: user.uid,
         updatedAt: serverTimestamp(),
       };
@@ -487,6 +517,62 @@ export default function BusinessProfileEdit() {
                 setBookingWindowDays(parsed);
               } else {
                 setBookingWindowDays(0);
+              }
+            }}
+            placeholder="30"
+            maxLength={3}
+          />
+        </View>
+      </View>
+
+      <View style={styles.intervalCard}>
+        <Text style={styles.intervalTitle}>מרווח בין תורים</Text>
+        <Text style={styles.intervalSubtitle}>
+          הגדירי כל כמה דקות ניתן לקבוע תור חדש ביומן
+        </Text>
+        <View style={styles.intervalChips}>
+          {BOOKING_INTERVAL_PRESETS.map((minutes) => {
+            const selected = bookingIntervalMinutes === minutes;
+            return (
+              <TouchableOpacity
+                key={minutes}
+                style={[
+                  styles.intervalChip,
+                  selected && styles.intervalChipSelected,
+                ]}
+                onPress={() => {
+                  setBookingIntervalMinutes(minutes);
+                  setBookingIntervalInput(String(minutes));
+                }}
+              >
+                <Text
+                  style={[
+                    styles.intervalChipText,
+                    selected && styles.intervalChipTextSelected,
+                  ]}
+                >
+                  כל {minutes} דקות
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <View style={styles.intervalCustomRow}>
+          <Text style={styles.intervalCustomLabel}>
+            או הזן מרווח מותאם אישית (5-180 דקות)
+          </Text>
+          <TextInput
+            style={styles.intervalInput}
+            keyboardType="number-pad"
+            value={bookingIntervalInput}
+            onChangeText={(value) => {
+              const digits = value.replace(/[^0-9]/g, "");
+              setBookingIntervalInput(digits);
+              const parsed = parseInt(digits, 10);
+              if (Number.isFinite(parsed)) {
+                setBookingIntervalMinutes(parsed);
+              } else {
+                setBookingIntervalMinutes(0);
               }
             }}
             placeholder="30"
@@ -753,6 +839,73 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   bookingWindowInput: {
+    width: 80,
+    backgroundColor: "#f4f6ff",
+    borderRadius: 12,
+    paddingVertical: 10,
+    textAlign: "center",
+    borderWidth: 1,
+    borderColor: "#dce1f6",
+    fontWeight: "700",
+    color: "#333",
+  },
+  intervalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    padding: 18,
+    marginTop: 24,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: "#eef1fb",
+  },
+  intervalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    textAlign: "right",
+    color: "#333",
+  },
+  intervalSubtitle: {
+    textAlign: "right",
+    color: "#666",
+    lineHeight: 20,
+  },
+  intervalChips: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  intervalChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d6dbf5",
+    backgroundColor: "#f6f7ff",
+  },
+  intervalChipSelected: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  intervalChipText: {
+    color: "#4a4f66",
+    fontWeight: "700",
+  },
+  intervalChipTextSelected: {
+    color: "#fff",
+  },
+  intervalCustomRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  intervalCustomLabel: {
+    flex: 1,
+    textAlign: "right",
+    color: "#444",
+    fontWeight: "600",
+  },
+  intervalInput: {
     width: 80,
     backgroundColor: "#f4f6ff",
     borderRadius: 12,
