@@ -57,6 +57,35 @@ const formatHoursRange = (from, to, fallback) => {
   return fallback || "לא צוין";
 };
 
+const DEFAULT_TIME_SLOTS = [
+  "08:00",
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "13:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "18:00",
+  "19:00",
+  "20:00",
+];
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatHoursRange = (from, to, fallback) => {
+  if (from && to) {
+    return `${from} – ${to}`;
+  }
+  return fallback || "לא צוין";
+};
+
 export default function BusinessPage() {
   const { id } = useLocalSearchParams(); // זה UID של בעל העסק
   const router = useRouter();

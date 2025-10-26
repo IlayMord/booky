@@ -35,6 +35,31 @@ const timeToMinutes = (time) => {
   return hours * 60 + minutes;
 };
 
+const HOURS_OPTIONS = [
+  "08:00",
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "13:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "18:00",
+  "19:00",
+  "20:00",
+];
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time)) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatHoursRange = (from, to) =>
+  from && to ? `${from} – ${to}` : "";
+
 export default function BusinessProfileEdit() {
   const [business, setBusiness] = useState({
     name: "",
