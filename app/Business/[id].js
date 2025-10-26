@@ -189,6 +189,13 @@ export default function BusinessPage() {
     [dateOptions]
   );
 
+  const displayedDateOptions = useMemo(() => {
+    if (!dateOptions.length) {
+      return [];
+    }
+    return [...dateOptions].reverse();
+  }, [dateOptions]);
+
   const availableHours = useMemo(() => {
     if (!selectedDate) return [];
 
@@ -482,7 +489,7 @@ export default function BusinessPage() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.dateScroll}
         >
-          {dateOptions.map((option) => {
+          {displayedDateOptions.map((option) => {
             const isSelected = selectedDate === option.value;
             return (
               <TouchableOpacity
