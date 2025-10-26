@@ -27,6 +27,7 @@ import {
   WEEK_DAYS,
   getDisplayWeeklyHoursRows,
   getWeekdayKeyFromDate,
+  sanitizeWeeklyHours,
 } from "../../constants/weekdays";
 
 const clampBookingWindow = (value) => {
@@ -122,7 +123,13 @@ const formatHoursRange = (from, to, fallback) => {
   if (from && to) {
     return `${from} – ${to}`;
   }
-  return fallback || "לא צוין";
+  if (Array.isArray(fallback)) {
+    return fallback.join("\n");
+  }
+  if (typeof fallback === "string" && fallback.trim()) {
+    return fallback;
+  }
+  return "לא צוין";
 };
 
 export default function BusinessPage() {
@@ -199,12 +206,24 @@ export default function BusinessPage() {
     );
   }, [bookingIntervalMinutes, business, selectedDate]);
 
-  const displayWeeklyHours = useMemo(
-    () => getDisplayWeeklyHoursRows(business?.weeklyHours),
-    [business?.weeklyHours]
-  );
+  const displayWeeklyHours = useMemo(() => {
+    if (!business?.weeklyHours) {
+      return [];
+    }
+    return getDisplayWeeklyHoursRows(business.weeklyHours);
+  }, [business?.weeklyHours]);
 
   const hasWeeklyHours = displayWeeklyHours.length > 0;
+
+  const legacyHoursText = useMemo(() => {
+    if (Array.isArray(business?.hours)) {
+      return business.hours.join("\n");
+    }
+    if (typeof business?.hours === "string") {
+      return business.hours;
+    }
+    return "";
+  }, [business?.hours]);
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
   useEffect(() => {
@@ -212,7 +231,20 @@ export default function BusinessPage() {
       try {
         const ref = doc(db, "businesses", id);
         const snap = await getDoc(ref);
-        if (snap.exists()) setBusiness({ id: snap.id, ...snap.data() });
+        if (snap.exists()) {
+          const data = snap.data();
+          const { condensedWeeklyHours, weeklyHours, ...businessData } =
+            data || {};
+          const normalizedWeeklyHours = sanitizeWeeklyHours(
+            weeklyHours || condensedWeeklyHours
+          );
+
+          setBusiness({
+            id: snap.id,
+            ...businessData,
+            weeklyHours: normalizedWeeklyHours,
+          });
+        }
       } catch (err) {
         console.error("שגיאה בשליפת עסק:", err);
       } finally {
@@ -350,7 +382,7 @@ export default function BusinessPage() {
   const hoursLabel = formatHoursRange(
     business?.openingHour,
     business?.closingHour,
-    business?.hours
+    legacyHoursText
   );
 
   const handleNavigation = async (provider) => {

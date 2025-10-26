@@ -24,7 +24,10 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
-import { getDisplayWeeklyHoursRows } from "../constants/weekdays";
+import {
+  getDisplayWeeklyHoursRows,
+  sanitizeWeeklyHours,
+} from "../constants/weekdays";
 
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
@@ -56,7 +59,18 @@ export default function BusinessDashboard() {
         const snap = await getDoc(ref);
 
         if (snap.exists()) {
-          setBusiness({ id: snap.id, ...snap.data() });
+          const data = snap.data();
+          const { condensedWeeklyHours, weeklyHours, ...businessData } =
+            data || {};
+          const normalizedWeeklyHours = sanitizeWeeklyHours(
+            weeklyHours || condensedWeeklyHours
+          );
+
+          setBusiness({
+            id: snap.id,
+            ...businessData,
+            weeklyHours: normalizedWeeklyHours,
+          });
           await fetchBookings(user.uid);
         } else {
           Alert.alert("לא נמצא עסק", "צור אחד בעריכת פרופיל.");
@@ -104,12 +118,24 @@ export default function BusinessDashboard() {
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
 
-  const displayWeeklyHours = useMemo(
-    () => getDisplayWeeklyHoursRows(business?.weeklyHours),
-    [business?.weeklyHours]
-  );
+  const displayWeeklyHours = useMemo(() => {
+    if (!business?.weeklyHours) {
+      return [];
+    }
+    return getDisplayWeeklyHoursRows(business.weeklyHours);
+  }, [business?.weeklyHours]);
 
   const hasWeeklyHours = displayWeeklyHours.length > 0;
+
+  const legacyHoursFallback = useMemo(() => {
+    if (Array.isArray(business?.hours)) {
+      return business.hours.join("\n");
+    }
+    if (typeof business?.hours === "string") {
+      return business.hours;
+    }
+    return "לא צוינו שעות פעילות";
+  }, [business?.hours]);
 
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
@@ -210,6 +236,24 @@ export default function BusinessDashboard() {
             ) : (
               <Text style={styles.weeklyHoursFallback}>
                 {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {legacyHoursFallback}
               </Text>
             )}
           </View>
