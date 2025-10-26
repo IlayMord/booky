@@ -24,6 +24,7 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import { WEEK_DAYS } from "../constants/weekdays";
 
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
@@ -61,7 +62,7 @@ export default function BusinessDashboard() {
       }
     };
     fetchBusinessData();
-  }, []);
+  }, [router]);
 
   const fetchBookings = async (businessId) => {
     try {
@@ -95,6 +96,28 @@ export default function BusinessDashboard() {
   const approved = bookings.filter((b) => b.status === "approved").length;
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
+
+  const hasWeeklyHours = Boolean(
+    business?.weeklyHours &&
+      WEEK_DAYS.some((day) => {
+        const schedule = business.weeklyHours[day.key];
+        return schedule && !schedule.closed && schedule.open && schedule.close;
+      })
+  );
+
+  const weeklyHoursRows = WEEK_DAYS.map((day) => {
+    const schedule = business?.weeklyHours?.[day.key];
+    if (!schedule) {
+      return { ...day, text: "לא הוגדר" };
+    }
+    if (schedule.closed) {
+      return { ...day, text: "סגור" };
+    }
+    if (!schedule.open || !schedule.close) {
+      return { ...day, text: "-" };
+    }
+    return { ...day, text: `${schedule.open} – ${schedule.close}` };
+  });
 
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
@@ -134,9 +157,21 @@ export default function BusinessDashboard() {
           <Text style={styles.businessName}>{business?.name}</Text>
           <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
           <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
-          <Text style={styles.businessInfo}>
-            🕒 {business?.hours || "לא צוין"}
-          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              weeklyHoursRows.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
           <Text style={styles.businessInfo}>
             🧾 אישור אוטומטי: {business?.autoApprove ? "כן" : "לא"}
           </Text>
@@ -253,6 +288,35 @@ const styles = StyleSheet.create({
   },
   businessName: { fontSize: 22, fontWeight: "900", textAlign: "right" },
   businessInfo: { textAlign: "right", color: "#555", fontSize: 14 },
+  weeklyHoursContainer: {
+    marginTop: 10,
+    backgroundColor: "#f6f7fc",
+    borderRadius: 14,
+    padding: 12,
+    gap: 6,
+  },
+  weeklyHoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  weeklyHoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  weeklyHoursDay: {
+    color: "#555",
+    fontWeight: "600",
+  },
+  weeklyHoursValue: {
+    color: "#333",
+    fontWeight: "700",
+  },
+  weeklyHoursFallback: {
+    color: "#666",
+    textAlign: "right",
+  },
   statsRow: {
     flexDirection: "row",
     flexWrap: "wrap",

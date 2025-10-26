@@ -1,29 +1,23 @@
-import { useRootNavigationState, useRouter } from "expo-router";
-import { useEffect } from "react";
+import { Redirect, useRootNavigationState } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 
 export default function Index() {
-  const router = useRouter();
-  const rootNavigation = useRootNavigationState(); // נבדוק שה־layout מוכן
+  const rootNavigation = useRootNavigationState();
 
-  useEffect(() => {
-    // מחכה שה־Root Layout ייטען לפני הניווט
-    if (!rootNavigation?.key) return;
+  if (!rootNavigation?.key) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#f5f7fa",
+        }}
+      >
+        <ActivityIndicator size="large" color="#6C63FF" />
+      </View>
+    );
+  }
 
-    // מפנה אוטומטית למסך הבית של הלקוחות
-    router.replace("/HomeClient");
-  }, [rootNavigation?.key]);
-
-  return (
-    <View
-      style={{
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#f5f7fa",
-      }}
-    >
-      <ActivityIndicator size="large" color="#6C63FF" />
-    </View>
-  );
+  return <Redirect href="/HomeClient" />;
 }
