@@ -12,7 +12,7 @@ export default function Index() {
 
     // מפנה אוטומטית למסך הבית של הלקוחות
     router.replace("/HomeClient");
-  }, [rootNavigation?.key]);
+  }, [router, rootNavigation?.key]);
 
   return (
     <View

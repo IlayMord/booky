@@ -61,7 +61,7 @@ export default function BusinessDashboard() {
       }
     };
     fetchBusinessData();
-  }, []);
+  }, [router]);
 
   const fetchBookings = async (businessId) => {
     try {
