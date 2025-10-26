@@ -19,7 +19,7 @@ import { auth, db } from "../firebaseConfig";
 
 const screenWidth = Dimensions.get("window").width;
 
-const derivePreferredName = (user, profileData) => {
+const hydrateUserName = (user, profileData) => {
   if (profileData) {
     const raw =
       profileData.fullName ||
@@ -81,7 +81,7 @@ export default function HomeClient() {
         return;
       }
 
-      const fallbackName = derivePreferredName(user);
+      const fallbackName = hydrateUserName(user);
       setUserName(fallbackName || "אורח");
 
       const loadProfile = async () => {
@@ -90,7 +90,7 @@ export default function HomeClient() {
           const snap = await getDoc(ref);
           if (!snap.exists()) return;
           const data = snap.data();
-          const profileName = derivePreferredName(user, data);
+          const profileName = hydrateUserName(user, data);
           if (profileName && isMounted) {
             setUserName(profileName);
           }

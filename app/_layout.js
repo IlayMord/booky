@@ -1,4 +1,4 @@
-import { Slot, Stack } from "expo-router";
+import { Stack } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -12,9 +12,7 @@ export default function RootLayout() {
             gestureEnabled: true,
             animation: "slide_from_right",
           }}
-        >
-          <Slot />
-        </Stack>
+        />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
