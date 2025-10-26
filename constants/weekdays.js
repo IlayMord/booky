@@ -77,7 +77,15 @@ const isDefinedScheduleText = (text) => {
 const dedupeWeeklyHourRows = (rows = []) => {
   const seen = new Set();
   return rows.filter((row) => {
-    const signature = `${row?.label ?? ""}|${row?.text ?? ""}`;
+    if (!row) {
+      return false;
+    }
+    const signatureParts = [
+      row.key ? String(row.key) : "",
+      (row.label || "").trim(),
+      (row.text || "").trim(),
+    ];
+    const signature = signatureParts.join("|");
     if (seen.has(signature)) {
       return false;
     }
