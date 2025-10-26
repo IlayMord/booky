@@ -22,6 +22,40 @@ import {
   View,
 } from "react-native";
 import { auth, db } from "../../firebaseConfig";
+import { WEEK_DAYS, getWeekdayKeyFromDate } from "../../constants/weekdays";
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const minutesToTime = (value) => {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+};
+
+const generateTimeSlots = (from, to, step = 30) => {
+  const start = timeToMinutes(from);
+  const end = timeToMinutes(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+    return [];
+  }
+
+  const slots = [];
+  for (let minutes = start; minutes < end; minutes += step) {
+    slots.push(minutesToTime(minutes));
+  }
+  return slots;
+};
+
+const formatHoursRange = (from, to, fallback) => {
+  if (from && to) {
+    return `${from} – ${to}`;
+  }
+  return fallback || "לא צוין";
+};
 
 const DEFAULT_TIME_SLOTS = [
   "08:00",
@@ -65,26 +99,47 @@ export default function BusinessPage() {
   const [bookedTimes, setBookedTimes] = useState(new Set());
 
   const availableHours = useMemo(() => {
-    if (!business?.openingHour || !business?.closingHour) {
-      return DEFAULT_TIME_SLOTS;
+    if (!selectedDate) return [];
+
+    const dayKey = getWeekdayKeyFromDate(selectedDate);
+    if (!dayKey) return [];
+
+    const weeklyConfig = business?.weeklyHours?.[dayKey];
+    if (weeklyConfig?.closed) {
+      return [];
     }
 
-    const openMinutes = timeToMinutes(business.openingHour);
-    const closeMinutes = timeToMinutes(business.closingHour);
+    const opening = weeklyConfig?.open || business?.openingHour;
+    const closing = weeklyConfig?.close || business?.closingHour;
 
-    if (!Number.isFinite(openMinutes) || !Number.isFinite(closeMinutes)) {
-      return DEFAULT_TIME_SLOTS;
+    if (!opening || !closing) {
+      return [];
     }
 
-    if (openMinutes >= closeMinutes) {
-      return DEFAULT_TIME_SLOTS;
-    }
+    return generateTimeSlots(opening, closing);
+  }, [business?.weeklyHours, business?.openingHour, business?.closingHour, selectedDate]);
 
-    return DEFAULT_TIME_SLOTS.filter((slot) => {
-      const value = timeToMinutes(slot);
-      return value >= openMinutes && value <= closeMinutes;
-    });
-  }, [business?.openingHour, business?.closingHour]);
+  const hasWeeklyHours = Boolean(
+    business?.weeklyHours &&
+      WEEK_DAYS.some((day) => {
+        const schedule = business.weeklyHours[day.key];
+        return schedule && !schedule.closed && schedule.open && schedule.close;
+      })
+  );
+
+  const weeklyHoursRows = WEEK_DAYS.map((day) => {
+    const schedule = business?.weeklyHours?.[day.key];
+    if (!schedule) {
+      return { ...day, text: "לא הוגדר" };
+    }
+    if (schedule.closed) {
+      return { ...day, text: "סגור" };
+    }
+    if (!schedule.open || !schedule.close) {
+      return { ...day, text: "-" };
+    }
+    return { ...day, text: `${schedule.open} – ${schedule.close}` };
+  });
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
   useEffect(() => {
@@ -240,7 +295,19 @@ export default function BusinessPage() {
       <Text style={styles.desc}>{business.description}</Text>
       <Text style={styles.info}>📍 {business.address}</Text>
       <Text style={styles.info}>📞 {business.phone}</Text>
-      <Text style={styles.info}>🕒 {hoursLabel}</Text>
+      <View style={styles.hoursContainerBox}>
+        <Text style={styles.hoursTitle}>🕒 שעות פעילות</Text>
+        {hasWeeklyHours ? (
+          weeklyHoursRows.map((row) => (
+            <View key={row.key} style={styles.hoursRow}>
+              <Text style={styles.hoursDay}>{row.label}</Text>
+              <Text style={styles.hoursValue}>{row.text}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.hoursFallback}>{hoursLabel}</Text>
+        )}
+      </View>
 
       {/* 🔹 בחירת תאריך */}
       <View style={styles.section}>
@@ -367,6 +434,35 @@ const styles = StyleSheet.create({
     textAlign: "right",
     color: "#444",
     fontSize: 14,
+  },
+  hoursContainerBox: {
+    marginTop: 12,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+  },
+  hoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  hoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  hoursDay: {
+    color: "#555",
+    fontWeight: "600",
+  },
+  hoursValue: {
+    color: "#333",
+    fontWeight: "700",
+  },
+  hoursFallback: {
+    color: "#666",
+    textAlign: "right",
   },
   section: {
     marginTop: 20,

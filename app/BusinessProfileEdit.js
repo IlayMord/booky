@@ -6,7 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -15,8 +17,23 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import {
+  DateTimePickerAndroid,
+  default as DateTimePicker,
+} from "@react-native-community/datetimepicker";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  WEEK_DAYS,
+  createEmptyWeeklyHours,
+  sanitizeWeeklyHours,
+} from "../constants/weekdays";
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time)) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
 
 const HOURS_OPTIONS = [
   "08:00",
@@ -50,16 +67,48 @@ export default function BusinessProfileEdit() {
     address: "",
     category: "",
     description: "",
-    hours: "",
-    openingHour: "",
-    closingHour: "",
     image: "",
     autoApprove: false,
   });
+  const [weeklyHours, setWeeklyHours] = useState(createEmptyWeeklyHours());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activePicker, setActivePicker] = useState(null);
+  const [iosPickerValue, setIosPickerValue] = useState(new Date());
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  const parseFallbackHours = (data) => {
+    let openingHour = data.openingHour || "";
+    let closingHour = data.closingHour || "";
+
+    if ((!openingHour || !closingHour) && typeof data.hours === "string") {
+      const match = data.hours.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
+      if (match) {
+        openingHour = openingHour || match[1];
+        closingHour = closingHour || match[2];
+      }
+    }
+
+    return { openingHour, closingHour };
+  };
+
+  const applyFallbackToWeekly = (hoursMap, fallback) => {
+    const { openingHour, closingHour } = fallback;
+    if (!openingHour || !closingHour) {
+      return hoursMap;
+    }
+
+    const updated = { ...hoursMap };
+    WEEK_DAYS.forEach((day) => {
+      updated[day.key] = {
+        open: openingHour,
+        close: closingHour,
+        closed: false,
+      };
+    });
+    return updated;
+  };
 
   useEffect(() => {
     const fetchBusiness = async () => {
@@ -70,22 +119,21 @@ export default function BusinessProfileEdit() {
         const snap = await getDoc(ref);
         if (snap.exists()) {
           const data = snap.data();
-          let openingHour = data.openingHour || "";
-          let closingHour = data.closingHour || "";
+          const fallbackHours = parseFallbackHours(data);
+          const sanitized = sanitizeWeeklyHours(data.weeklyHours);
+          const hasAnyWeekly = Object.values(sanitized).some((day) =>
+            day.open || day.close
+          );
 
-          if ((!openingHour || !closingHour) && typeof data.hours === "string") {
-            const match = data.hours.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
-            if (match) {
-              openingHour = openingHour || match[1];
-              closingHour = closingHour || match[2];
-            }
-          }
+          setWeeklyHours(
+            hasAnyWeekly
+              ? sanitized
+              : applyFallbackToWeekly(sanitized, fallbackHours)
+          );
 
           setBusiness((prev) => ({
             ...prev,
             ...data,
-            openingHour,
-            closingHour,
             autoApprove: data.autoApprove ?? false,
           }));
         }
@@ -117,22 +165,115 @@ export default function BusinessProfileEdit() {
     }
   };
 
+  const getInitialTimeValue = (time) => {
+    const base = new Date();
+    base.setSeconds(0, 0);
+    if (/^\d{2}:\d{2}$/.test(time)) {
+      const [h, m] = time.split(":").map(Number);
+      base.setHours(h, m, 0, 0);
+    } else {
+      base.setHours(9, 0, 0, 0);
+    }
+    return base;
+  };
+
+  const updateWeeklyHour = (dayKey, field, date) => {
+    if (!date) return;
+    const hours = `${String(date.getHours()).padStart(2, "0")}:${String(
+      date.getMinutes()
+    ).padStart(2, "0")}`;
+    setWeeklyHours((prev) => ({
+      ...prev,
+      [dayKey]: {
+        ...prev[dayKey],
+        [field]: hours,
+        closed: false,
+      },
+    }));
+  };
+
+  const openTimePicker = (dayKey, field) => {
+    const currentValue = weeklyHours[dayKey]?.[field];
+    const initialDate = getInitialTimeValue(currentValue);
+
+    if (Platform.OS === "android") {
+      DateTimePickerAndroid.open({
+        mode: "time",
+        is24Hour: true,
+        display: "spinner",
+        value: initialDate,
+        onChange: (_, selectedDate) => {
+          if (selectedDate) {
+            updateWeeklyHour(dayKey, field, selectedDate);
+          }
+        },
+      });
+      return;
+    }
+
+    setIosPickerValue(initialDate);
+    setActivePicker({ dayKey, field });
+  };
+
+  const closeIosPicker = () => {
+    setActivePicker(null);
+  };
+
+  const confirmIosPicker = () => {
+    if (activePicker) {
+      updateWeeklyHour(activePicker.dayKey, activePicker.field, iosPickerValue);
+    }
+    closeIosPicker();
+  };
+
   const handleSave = async () => {
     const user = auth.currentUser;
     if (!user) return Alert.alert("שגיאה", "אין משתמש מחובר");
     if (!business.name.trim()) return Alert.alert("שגיאה", "יש להזין שם עסק");
 
     const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (!timeRegex.test(business.openingHour) || !timeRegex.test(business.closingHour)) {
-      return Alert.alert("שגיאה", "יש להזין שעות פעילות בפורמט תקין (לדוגמה 09:00)");
+    const errors = [];
+    const validatedWeekly = {};
+    WEEK_DAYS.forEach((day) => {
+      const config = weeklyHours[day.key] || {};
+      const closed = Boolean(config.closed);
+      const open = config.open || "";
+      const close = config.close || "";
+
+      if (!closed) {
+        if (!timeRegex.test(open) || !timeRegex.test(close)) {
+          errors.push(`יש להזין שעות תקינות עבור ${day.label}`);
+        } else if (!(timeToMinutes(open) < timeToMinutes(close))) {
+          errors.push(`שעת הסגירה חייבת להיות מאוחרת מהפתיחה עבור ${day.label}`);
+        }
+      }
+
+      validatedWeekly[day.key] = { open, close, closed };
+    });
+
+    if (errors.length) {
+      Alert.alert("שגיאה", errors[0]);
+      return;
     }
 
-    const openMinutes = timeToMinutes(business.openingHour);
-    const closeMinutes = timeToMinutes(business.closingHour);
+    const firstOpenDay = WEEK_DAYS.find((day) => {
+      const config = validatedWeekly[day.key];
+      return config && !config.closed && config.open && config.close;
+    });
 
-    if (!(openMinutes < closeMinutes)) {
-      return Alert.alert("שגיאה", "שעת הסגירה חייבת להיות מאוחרת משעת הפתיחה");
-    }
+    const openingHour = firstOpenDay ? validatedWeekly[firstOpenDay.key].open : "";
+    const closingHour = firstOpenDay ? validatedWeekly[firstOpenDay.key].close : "";
+
+    const weeklySummary = WEEK_DAYS.map((day) => {
+      const config = validatedWeekly[day.key];
+      if (!config || config.closed) {
+        return `${day.shortLabel}: סגור`;
+      }
+      if (!config.open || !config.close) {
+        return `${day.shortLabel}: -`;
+      }
+      return `${day.shortLabel}: ${config.open} – ${config.close}`;
+    }).join("  •  ");
 
     try {
       setSaving(true);
@@ -142,11 +283,12 @@ export default function BusinessProfileEdit() {
         address: business.address,
         category: business.category,
         description: business.description,
-        hours: formatHoursRange(business.openingHour, business.closingHour),
-        openingHour: business.openingHour,
-        closingHour: business.closingHour,
+        hours: weeklySummary,
+        openingHour,
+        closingHour,
         image: business.image,
         autoApprove: business.autoApprove,
+        weeklyHours: validatedWeekly,
         ownerId: user.uid,
         updatedAt: serverTimestamp(),
       };
@@ -166,10 +308,19 @@ export default function BusinessProfileEdit() {
     }
   };
 
-  const formattedHours = useMemo(
-    () => formatHoursRange(business.openingHour, business.closingHour),
-    [business.openingHour, business.closingHour]
-  );
+  const weeklyPreview = useMemo(() => {
+    const parts = WEEK_DAYS.map((day) => {
+      const config = weeklyHours[day.key];
+      if (!config || config.closed) {
+        return `${day.shortLabel}: סגור`;
+      }
+      if (!config.open || !config.close) {
+        return `${day.shortLabel}: -`;
+      }
+      return `${day.shortLabel}: ${config.open} – ${config.close}`;
+    });
+    return parts.join("  •  ");
+  }, [weeklyHours]);
 
   if (loading)
     return (
@@ -235,55 +386,62 @@ export default function BusinessProfileEdit() {
 
       <View style={styles.hoursSection}>
         <Text style={styles.hoursTitle}>שעות פעילות</Text>
-        {formattedHours ? (
-          <Text style={styles.hoursSubtitle}>{formattedHours}</Text>
-        ) : (
-          <Text style={styles.hoursSubtitle}>בחרו שעת פתיחה וסגירה</Text>
-        )}
+        <Text style={styles.hoursSubtitle}>{weeklyPreview}</Text>
 
-        <View style={styles.hoursPickerBlock}>
-          <Text style={styles.hoursPickerLabel}>שעת פתיחה</Text>
-          <View style={styles.hoursOptionsRow}>
-            {HOURS_OPTIONS.map((option) => {
-              const selected = option === business.openingHour;
-              return (
-                <TouchableOpacity
-                  key={`open-${option}`}
-                  onPress={() => setBusiness({ ...business, openingHour: option })}
-                  style={[styles.hourChip, selected && styles.hourChipSelected]}
-                >
-                  <Text
-                    style={[styles.hourChipText, selected && styles.hourChipTextSelected]}
-                  >
-                    {option}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        {WEEK_DAYS.map((day) => {
+          const config = weeklyHours[day.key];
+          const closed = config?.closed;
+          return (
+            <View key={day.key} style={styles.dayCard}>
+              <View style={styles.dayHeader}>
+                <Text style={styles.dayLabel}>{day.label}</Text>
+                <View style={styles.daySwitchRow}>
+                  <Text style={styles.daySwitchLabel}>סגור</Text>
+                  <Switch
+                    value={closed}
+                    onValueChange={(value) =>
+                      setWeeklyHours((prev) => ({
+                        ...prev,
+                        [day.key]: {
+                          ...prev[day.key],
+                          closed: value,
+                        },
+                      }))
+                    }
+                    trackColor={{ false: "#ccc", true: "#6C63FF" }}
+                    thumbColor={closed ? "#fff" : "#888"}
+                  />
+                </View>
+              </View>
 
-        <View style={styles.hoursPickerBlock}>
-          <Text style={styles.hoursPickerLabel}>שעת סגירה</Text>
-          <View style={styles.hoursOptionsRow}>
-            {HOURS_OPTIONS.map((option) => {
-              const selected = option === business.closingHour;
-              return (
-                <TouchableOpacity
-                  key={`close-${option}`}
-                  onPress={() => setBusiness({ ...business, closingHour: option })}
-                  style={[styles.hourChip, selected && styles.hourChipSelected]}
-                >
-                  <Text
-                    style={[styles.hourChipText, selected && styles.hourChipTextSelected]}
+              {closed ? (
+                <Text style={styles.closedText}>היום מוגדר כיום מנוחה</Text>
+              ) : (
+                <View style={styles.timeRow}>
+                  <TouchableOpacity
+                    style={styles.timePickerBtn}
+                    onPress={() => openTimePicker(day.key, "open")}
                   >
-                    {option}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+                    <Text style={styles.timePickerLabel}>שעת פתיחה</Text>
+                    <Text style={styles.timePickerValue}>
+                      {config?.open || "בחרו שעה"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.timePickerBtn}
+                    onPress={() => openTimePicker(day.key, "close")}
+                  >
+                    <Text style={styles.timePickerLabel}>שעת סגירה</Text>
+                    <Text style={styles.timePickerValue}>
+                      {config?.close || "בחרו שעה"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          );
+        })}
       </View>
 
       {/* 🟢 אישור אוטומטי */}
@@ -310,13 +468,50 @@ export default function BusinessProfileEdit() {
         )}
       </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.cancelBtn}
-          onPress={() => router.replace("/BusinessDashboard")}
-        >
-          <Text style={styles.cancelText}>ביטול וחזרה</Text>
-        </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.cancelBtn}
+        onPress={() => router.replace("/BusinessDashboard")}
+      >
+        <Text style={styles.cancelText}>ביטול וחזרה</Text>
+      </TouchableOpacity>
       </ScrollView>
+
+      {Platform.OS === "ios" && activePicker && (
+        <Modal transparent animationType="fade" visible>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>
+                {`בחירת שעה עבור ${
+                  WEEK_DAYS.find((day) => day.key === activePicker.dayKey)?.label || ""
+                }`}
+              </Text>
+              <DateTimePicker
+                mode="time"
+                value={iosPickerValue}
+                onChange={(_, date) => {
+                  if (date) setIosPickerValue(date);
+                }}
+                display="spinner"
+                locale="he-IL"
+              />
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalCancel]}
+                  onPress={closeIosPicker}
+                >
+                  <Text style={styles.modalCancelText}>ביטול</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalConfirm]}
+                  onPress={confirmIosPicker}
+                >
+                  <Text style={styles.modalConfirmText}>שמור</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -369,6 +564,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     padding: 16,
     borderRadius: 16,
+    gap: 12,
   },
   hoursTitle: {
     fontSize: 18,
@@ -379,37 +575,63 @@ const styles = StyleSheet.create({
   hoursSubtitle: {
     textAlign: "right",
     color: "#666",
-    marginTop: 6,
+    fontSize: 12,
   },
-  hoursPickerBlock: {
-    marginTop: 16,
+  dayCard: {
+    backgroundColor: "#f7f8fc",
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
   },
-  hoursPickerLabel: {
+  dayHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dayLabel: {
+    fontSize: 16,
     fontWeight: "700",
-    color: "#444",
-    marginBottom: 8,
-    textAlign: "right",
+    color: "#333",
   },
-  hoursOptionsRow: {
-    flexDirection: "row-reverse",
-    flexWrap: "wrap",
+  daySwitchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
-  hourChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: "#f0f1f6",
-    margin: 4,
-  },
-  hourChipSelected: {
-    backgroundColor: "#6C63FF",
-  },
-  hourChipText: {
-    color: "#444",
+  daySwitchLabel: {
+    color: "#555",
     fontWeight: "600",
   },
-  hourChipTextSelected: {
-    color: "#fff",
+  closedText: {
+    textAlign: "right",
+    color: "#999",
+    fontStyle: "italic",
+  },
+  timeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  timePickerBtn: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "#e0e3ef",
+  },
+  timePickerLabel: {
+    color: "#666",
+    fontSize: 12,
+    textAlign: "right",
+  },
+  timePickerValue: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#333",
+    textAlign: "right",
   },
   switchRow: {
     flexDirection: "row-reverse",
@@ -432,4 +654,47 @@ const styles = StyleSheet.create({
   cancelBtn: { marginTop: 15, alignItems: "center" },
   cancelText: { color: "#666", fontWeight: "700" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 20,
+    gap: 16,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#333",
+    textAlign: "center",
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  modalCancel: {
+    backgroundColor: "#f0f1f6",
+  },
+  modalConfirm: {
+    backgroundColor: "#6C63FF",
+  },
+  modalCancelText: {
+    color: "#555",
+    fontWeight: "700",
+  },
+  modalConfirmText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
 });
