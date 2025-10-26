@@ -9,7 +9,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,6 +24,17 @@ import { Calendar } from "react-native-calendars";
 import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  getDisplayWeeklyHoursRows,
+  sanitizeWeeklyHours,
+} from "../constants/weekdays";
+
+const clampBookingInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  const rounded = Math.round(parsed);
+  return Math.min(Math.max(rounded, 5), 180);
+};
 
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
@@ -48,7 +59,19 @@ export default function BusinessDashboard() {
         const snap = await getDoc(ref);
 
         if (snap.exists()) {
-          setBusiness({ id: snap.id, ...snap.data() });
+          const rawData = snap.data() || {};
+          const normalizedWeeklyHours = sanitizeWeeklyHours(
+            rawData.weeklyHours ?? rawData.condensedWeeklyHours
+          );
+          const businessData = { ...rawData };
+          delete businessData.weeklyHours;
+          delete businessData.condensedWeeklyHours;
+
+          setBusiness({
+            id: snap.id,
+            ...businessData,
+            weeklyHours: normalizedWeeklyHours,
+          });
           await fetchBookings(user.uid);
         } else {
           Alert.alert("לא נמצא עסק", "צור אחד בעריכת פרופיל.");
@@ -61,7 +84,7 @@ export default function BusinessDashboard() {
       }
     };
     fetchBusinessData();
-  }, []);
+  }, [router]);
 
   const fetchBookings = async (businessId) => {
     try {
@@ -96,6 +119,25 @@ export default function BusinessDashboard() {
   const pending = bookings.filter((b) => b.status === "pending").length;
   const cancelled = bookings.filter((b) => b.status === "cancelled").length;
 
+  const displayWeeklyHours = useMemo(() => {
+    if (!business?.weeklyHours) {
+      return [];
+    }
+    return getDisplayWeeklyHoursRows(business.weeklyHours);
+  }, [business?.weeklyHours]);
+
+  const hasWeeklyHours = displayWeeklyHours.length > 0;
+
+  const legacyHoursFallback = useMemo(() => {
+    if (Array.isArray(business?.hours)) {
+      return business.hours.join("\n");
+    }
+    if (typeof business?.hours === "string") {
+      return business.hours;
+    }
+    return "לא צוינו שעות פעילות";
+  }, [business?.hours]);
+
   // ===== 🔹 נתונים לגרף =====
   const monthlyStats = {};
   bookings.forEach((b) => {
@@ -106,6 +148,16 @@ export default function BusinessDashboard() {
     labels: Object.keys(monthlyStats),
     datasets: [{ data: Object.values(monthlyStats) }],
   };
+
+  const bookingWindowDays = (() => {
+    const parsed = Number(business?.bookingWindowDays);
+    if (!Number.isFinite(parsed)) return 30;
+    return Math.min(Math.max(Math.round(parsed), 1), 90);
+  })();
+
+  const bookingIntervalMinutes = clampBookingInterval(
+    business?.bookingIntervalMinutes
+  );
 
   if (loading)
     return (
@@ -135,8 +187,26 @@ export default function BusinessDashboard() {
           <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
           <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
           <Text style={styles.businessInfo}>
-            🕒 {business?.hours || "לא צוין"}
+            🗓️ פתיחת יומן: {bookingWindowDays} ימים קדימה
           </Text>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {legacyHoursFallback}
+              </Text>
+            )}
+          </View>
           <Text style={styles.businessInfo}>
             🧾 אישור אוטומטי: {business?.autoApprove ? "כן" : "לא"}
           </Text>
@@ -253,6 +323,38 @@ const styles = StyleSheet.create({
   },
   businessName: { fontSize: 22, fontWeight: "900", textAlign: "right" },
   businessInfo: { textAlign: "right", color: "#555", fontSize: 14 },
+  weeklyHoursContainer: {
+    marginTop: 10,
+    backgroundColor: "#f6f7fc",
+    borderRadius: 14,
+    padding: 12,
+    gap: 6,
+  },
+  weeklyHoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  weeklyHoursRow: {
+    flexDirection: "row-reverse",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  weeklyHoursDay: {
+    color: "#555",
+    fontWeight: "600",
+    textAlign: "right",
+  },
+  weeklyHoursValue: {
+    color: "#333",
+    fontWeight: "700",
+    textAlign: "left",
+  },
+  weeklyHoursFallback: {
+    color: "#666",
+    textAlign: "right",
+  },
   statsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
