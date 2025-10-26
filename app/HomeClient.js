@@ -102,6 +102,7 @@ export default function HomeClient() {
       loadProfile();
     });
 
+    hydrateUserName();
     fetchBusinesses();
 
     return () => {
