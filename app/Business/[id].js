@@ -24,59 +24,30 @@ import {
 import { auth, db } from "../../firebaseConfig";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../../constants/weekdays";
 
-const timeToMinutes = (time) => {
+const parseTimeToMinutes = (time) => {
   if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
   const [hours, minutes] = time.split(":").map(Number);
   return hours * 60 + minutes;
 };
 
-const minutesToTime = (value) => {
+const formatMinutesToTime = (value) => {
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 };
 
 const generateTimeSlots = (from, to, step = 30) => {
-  const start = timeToMinutes(from);
-  const end = timeToMinutes(to);
+  const start = parseTimeToMinutes(from);
+  const end = parseTimeToMinutes(to);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
     return [];
   }
 
   const slots = [];
   for (let minutes = start; minutes < end; minutes += step) {
-    slots.push(minutesToTime(minutes));
+    slots.push(formatMinutesToTime(minutes));
   }
   return slots;
-};
-
-const formatHoursRange = (from, to, fallback) => {
-  if (from && to) {
-    return `${from} – ${to}`;
-  }
-  return fallback || "לא צוין";
-};
-
-const DEFAULT_TIME_SLOTS = [
-  "08:00",
-  "09:00",
-  "10:00",
-  "11:00",
-  "12:00",
-  "13:00",
-  "14:00",
-  "15:00",
-  "16:00",
-  "17:00",
-  "18:00",
-  "19:00",
-  "20:00",
-];
-
-const timeToMinutes = (time) => {
-  if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
 };
 
 const formatHoursRange = (from, to, fallback) => {

@@ -26,13 +26,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
 import { WEEK_DAYS } from "../constants/weekdays";
 
-const formatHoursRange = (from, to, fallback) => {
-  if (from && to) {
-    return `${from} – ${to}`;
-  }
-  return fallback || "לא צוין";
-};
-
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
   const [bookings, setBookings] = useState([]);
