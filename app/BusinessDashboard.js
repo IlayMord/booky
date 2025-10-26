@@ -25,6 +25,13 @@ import { BarChart } from "react-native-chart-kit";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
 
+const formatHoursRange = (from, to, fallback) => {
+  if (from && to) {
+    return `${from} – ${to}`;
+  }
+  return fallback || "לא צוין";
+};
+
 export default function BusinessDashboard() {
   const [business, setBusiness] = useState(null);
   const [bookings, setBookings] = useState([]);
@@ -61,7 +68,7 @@ export default function BusinessDashboard() {
       }
     };
     fetchBusinessData();
-  }, []);
+  }, [router]);
 
   const fetchBookings = async (businessId) => {
     try {
@@ -135,7 +142,13 @@ export default function BusinessDashboard() {
           <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
           <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
           <Text style={styles.businessInfo}>
-            🕒 {business?.hours || "לא צוין"}
+            🕒
+            {" "}
+            {formatHoursRange(
+              business?.openingHour,
+              business?.closingHour,
+              business?.hours
+            )}
           </Text>
           <Text style={styles.businessInfo}>
             🧾 אישור אוטומטי: {business?.autoApprove ? "כן" : "לא"}
