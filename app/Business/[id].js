@@ -22,6 +22,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../../firebaseConfig";
 import {
   WEEK_DAYS,
@@ -412,7 +413,8 @@ export default function BusinessPage() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView contentContainerStyle={styles.container}>
       {/* 🔹 כותרת */}
       <TouchableOpacity
         style={styles.backBtn}
@@ -572,11 +574,16 @@ export default function BusinessPage() {
       >
         <Text style={styles.bookBtnText}>קבע תור עכשיו</Text>
       </TouchableOpacity>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#f5f7fa",
+  },
   container: {
     padding: 20,
     paddingBottom: 40,
@@ -587,7 +594,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  backBtn: { alignSelf: "flex-start", marginBottom: 10 },
+  backBtn: { alignSelf: "flex-start", marginTop: 4, marginBottom: 10 },
   image: {
     width: "100%",
     height: 200,
@@ -696,7 +703,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   dateScroll: {
-    flexDirection: "row",
+    flexDirection: "row-reverse",
     justifyContent: "flex-start",
     gap: 12,
     paddingHorizontal: 4,
