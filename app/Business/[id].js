@@ -234,7 +234,7 @@ export default function BusinessPage() {
         if (snap.exists()) {
           const rawData = snap.data() || {};
           const normalizedWeeklyHours = sanitizeWeeklyHours(
-            snap.get("weeklyHours") || snap.get("condensedWeeklyHours")
+            rawData.weeklyHours ?? rawData.condensedWeeklyHours
           );
           const businessData = { ...rawData };
           delete businessData.weeklyHours;
