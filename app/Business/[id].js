@@ -10,7 +10,7 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -23,6 +23,35 @@ import {
 } from "react-native";
 import { auth, db } from "../../firebaseConfig";
 
+const DEFAULT_TIME_SLOTS = [
+  "08:00",
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "13:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "18:00",
+  "19:00",
+  "20:00",
+];
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatHoursRange = (from, to, fallback) => {
+  if (from && to) {
+    return `${from} – ${to}`;
+  }
+  return fallback || "לא צוין";
+};
+
 export default function BusinessPage() {
   const { id } = useLocalSearchParams(); // זה UID של בעל העסק
   const router = useRouter();
@@ -32,21 +61,30 @@ export default function BusinessPage() {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
 
-  // שעות לבחירה (נשאר כמו שהיה)
-  const hours = [
-    "09:00",
-    "10:00",
-    "11:00",
-    "12:00",
-    "13:00",
-    "14:00",
-    "15:00",
-    "16:00",
-    "17:00",
-  ];
-
   // 🆕 ננהל סט של שעות תפוסות עבור היום הנבחר
   const [bookedTimes, setBookedTimes] = useState(new Set());
+
+  const availableHours = useMemo(() => {
+    if (!business?.openingHour || !business?.closingHour) {
+      return DEFAULT_TIME_SLOTS;
+    }
+
+    const openMinutes = timeToMinutes(business.openingHour);
+    const closeMinutes = timeToMinutes(business.closingHour);
+
+    if (!Number.isFinite(openMinutes) || !Number.isFinite(closeMinutes)) {
+      return DEFAULT_TIME_SLOTS;
+    }
+
+    if (openMinutes >= closeMinutes) {
+      return DEFAULT_TIME_SLOTS;
+    }
+
+    return DEFAULT_TIME_SLOTS.filter((slot) => {
+      const value = timeToMinutes(slot);
+      return value >= openMinutes && value <= closeMinutes;
+    });
+  }, [business?.openingHour, business?.closingHour]);
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
   useEffect(() => {
@@ -63,6 +101,12 @@ export default function BusinessPage() {
     };
     fetchBusiness();
   }, [id]);
+
+  useEffect(() => {
+    if (selectedTime && !availableHours.includes(selectedTime)) {
+      setSelectedTime("");
+    }
+  }, [availableHours, selectedTime]);
 
   // 🆕 שליפת שעות תפוסות ליום הנבחר עבור העסק הזה
   useEffect(() => {
@@ -95,6 +139,14 @@ export default function BusinessPage() {
 
     if (!selectedDate || !selectedTime) {
       Alert.alert("חסר מידע", "אנא בחר יום ושעה");
+      return;
+    }
+
+    if (!availableHours.includes(selectedTime)) {
+      Alert.alert(
+        "שעה לא זמינה",
+        "השעה שנבחרה אינה תואמת את שעות הפעילות של העסק"
+      );
       return;
     }
 
@@ -157,6 +209,12 @@ export default function BusinessPage() {
       </View>
     );
 
+  const hoursLabel = formatHoursRange(
+    business?.openingHour,
+    business?.closingHour,
+    business?.hours
+  );
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       {/* 🔹 כותרת */}
@@ -182,7 +240,7 @@ export default function BusinessPage() {
       <Text style={styles.desc}>{business.description}</Text>
       <Text style={styles.info}>📍 {business.address}</Text>
       <Text style={styles.info}>📞 {business.phone}</Text>
-      <Text style={styles.info}>🕒 {business.hours}</Text>
+      <Text style={styles.info}>🕒 {hoursLabel}</Text>
 
       {/* 🔹 בחירת תאריך */}
       <View style={styles.section}>
@@ -201,7 +259,7 @@ export default function BusinessPage() {
                 <Text
                   style={[
                     styles.dateText,
-                    selectedDate === date && styles.selectedText,
+                    selectedDate === date && styles.selectedDateText,
                   ]}
                 >
                   {date.split("-").reverse().join(".")}
@@ -212,29 +270,29 @@ export default function BusinessPage() {
         </ScrollView>
       </View>
 
-      {/* 🔹 בחירת שעה (עם ניטרול שעות תפוסות) */}
+      {/* 🔹 בחירת שעה */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>בחר שעה</Text>
         <View style={styles.hoursContainer}>
-          {hours.map((h) => {
-            const isBooked = bookedTimes.has(h);
-            const isSelected = selectedTime === h;
+          {availableHours.map((h) => {
+            const disabled = bookedTimes.has(h);
+            const selected = selectedTime === h;
             return (
               <TouchableOpacity
                 key={h}
-                onPress={() => !isBooked && setSelectedTime(h)}
-                disabled={isBooked}
+                disabled={disabled}
+                onPress={() => setSelectedTime(h)}
                 style={[
                   styles.hourBtn,
-                  isSelected && styles.selectedBtn,
-                  isBooked && styles.hourDisabled,
+                  disabled && styles.disabledHour,
+                  selected && styles.selectedHour,
                 ]}
               >
                 <Text
                   style={[
                     styles.hourText,
-                    isSelected && styles.selectedText,
-                    isBooked && { color: "#999" },
+                    disabled && styles.disabledHourText,
+                    selected && styles.selectedHourText,
                   ]}
                 >
                   {h}
@@ -247,11 +305,14 @@ export default function BusinessPage() {
 
       {/* 🔹 כפתור קביעת תור */}
       <TouchableOpacity
-        style={[styles.bookBtn, (!selectedDate || !selectedTime) && { opacity: 0.7 }]}
+        style={[
+          styles.bookBtn,
+          (!selectedDate || !selectedTime) && { opacity: 0.7 },
+        ]}
         onPress={handleBooking}
         disabled={!selectedDate || !selectedTime}
       >
-        <Text style={styles.bookText}>קבע תור עכשיו</Text>
+        <Text style={styles.bookBtnText}>קבע תור עכשיו</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -260,6 +321,7 @@ export default function BusinessPage() {
 const styles = StyleSheet.create({
   container: {
     padding: 20,
+    paddingBottom: 40,
     backgroundColor: "#f5f7fa",
   },
   center: {
@@ -267,10 +329,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  backBtn: {
-    alignSelf: "flex-start",
-    marginBottom: 10,
-  },
+  backBtn: { alignSelf: "flex-start", marginBottom: 10 },
   image: {
     width: "100%",
     height: 200,
@@ -281,10 +340,10 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 200,
     borderRadius: 20,
-    backgroundColor: "#eee",
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: 15,
+    backgroundColor: "#eee",
+    justifyContent: "center",
+    alignItems: "center",
   },
   name: {
     fontSize: 24,
@@ -328,23 +387,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#ddd",
   },
-  hoursContainer: {
-    flexDirection: "row-reverse",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  hourBtn: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderWidth: 1,
-    borderColor: "#ddd",
-  },
-  hourDisabled: {
-    backgroundColor: "#eee",
-    borderColor: "#eee",
-  },
   selectedBtn: {
     backgroundColor: "#6C63FF",
     borderColor: "#6C63FF",
@@ -353,12 +395,40 @@ const styles = StyleSheet.create({
     color: "#333",
     fontWeight: "600",
   },
+  selectedDateText: {
+    color: "#fff",
+  },
+  hoursContainer: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+  },
+  hourBtn: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    marginLeft: 10,
+    marginBottom: 10,
+  },
   hourText: {
     color: "#333",
     fontWeight: "600",
   },
-  selectedText: {
+  selectedHour: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  selectedHourText: {
     color: "#fff",
+  },
+  disabledHour: {
+    backgroundColor: "#eee",
+    borderColor: "#eee",
+  },
+  disabledHourText: {
+    color: "#aaa",
   },
   bookBtn: {
     marginTop: 30,
@@ -367,7 +437,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
   },
-  bookText: {
+  bookBtnText: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "800",

@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +15,33 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+
+const HOURS_OPTIONS = [
+  "08:00",
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "13:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "18:00",
+  "19:00",
+  "20:00",
+];
+
+const timeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time)) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatHoursRange = (from, to) =>
+  from && to ? `${from} – ${to}` : "";
 
 export default function BusinessProfileEdit() {
   const [business, setBusiness] = useState({
@@ -25,12 +51,15 @@ export default function BusinessProfileEdit() {
     category: "",
     description: "",
     hours: "",
+    openingHour: "",
+    closingHour: "",
     image: "",
     autoApprove: false,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     const fetchBusiness = async () => {
@@ -40,7 +69,25 @@ export default function BusinessProfileEdit() {
         const ref = doc(db, "businesses", user.uid);
         const snap = await getDoc(ref);
         if (snap.exists()) {
-          setBusiness({ autoApprove: false, ...snap.data() });
+          const data = snap.data();
+          let openingHour = data.openingHour || "";
+          let closingHour = data.closingHour || "";
+
+          if ((!openingHour || !closingHour) && typeof data.hours === "string") {
+            const match = data.hours.match(/(\d{2}:\d{2}).*?(\d{2}:\d{2})/);
+            if (match) {
+              openingHour = openingHour || match[1];
+              closingHour = closingHour || match[2];
+            }
+          }
+
+          setBusiness((prev) => ({
+            ...prev,
+            ...data,
+            openingHour,
+            closingHour,
+            autoApprove: data.autoApprove ?? false,
+          }));
         }
       } catch (err) {
         console.error("שגיאה בשליפת נתוני עסק:", err);
@@ -75,15 +122,38 @@ export default function BusinessProfileEdit() {
     if (!user) return Alert.alert("שגיאה", "אין משתמש מחובר");
     if (!business.name.trim()) return Alert.alert("שגיאה", "יש להזין שם עסק");
 
+    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (!timeRegex.test(business.openingHour) || !timeRegex.test(business.closingHour)) {
+      return Alert.alert("שגיאה", "יש להזין שעות פעילות בפורמט תקין (לדוגמה 09:00)");
+    }
+
+    const openMinutes = timeToMinutes(business.openingHour);
+    const closeMinutes = timeToMinutes(business.closingHour);
+
+    if (!(openMinutes < closeMinutes)) {
+      return Alert.alert("שגיאה", "שעת הסגירה חייבת להיות מאוחרת משעת הפתיחה");
+    }
+
     try {
       setSaving(true);
+      const payload = {
+        name: business.name,
+        phone: business.phone,
+        address: business.address,
+        category: business.category,
+        description: business.description,
+        hours: formatHoursRange(business.openingHour, business.closingHour),
+        openingHour: business.openingHour,
+        closingHour: business.closingHour,
+        image: business.image,
+        autoApprove: business.autoApprove,
+        ownerId: user.uid,
+        updatedAt: serverTimestamp(),
+      };
+
       await setDoc(
         doc(db, "businesses", user.uid),
-        {
-          ...business,
-          ownerId: user.uid,
-          updatedAt: serverTimestamp(),
-        },
+        payload,
         { merge: true }
       );
       Alert.alert("✅ עודכן", "פרטי העסק נשמרו בהצלחה");
@@ -96,6 +166,11 @@ export default function BusinessProfileEdit() {
     }
   };
 
+  const formattedHours = useMemo(
+    () => formatHoursRange(business.openingHour, business.closingHour),
+    [business.openingHour, business.closingHour]
+  );
+
   if (loading)
     return (
       <View style={styles.center}>
@@ -105,8 +180,14 @@ export default function BusinessProfileEdit() {
     );
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.header}>עריכת פרופיל עסקי</Text>
+    <SafeAreaView
+      style={[
+        styles.safeArea,
+        { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 16) },
+      ]}
+    >
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.header}>עריכת פרופיל עסקי</Text>
 
       {/* תמונת לוגו */}
       <TouchableOpacity onPress={handlePickImage} style={styles.imagePicker}>
@@ -151,12 +232,59 @@ export default function BusinessProfileEdit() {
         value={business.description}
         onChangeText={(v) => setBusiness({ ...business, description: v })}
       />
-      <TextInput
-        style={styles.input}
-        placeholder="שעות פעילות (לדוגמה: א'-ה' 9:00–18:00)"
-        value={business.hours}
-        onChangeText={(v) => setBusiness({ ...business, hours: v })}
-      />
+
+      <View style={styles.hoursSection}>
+        <Text style={styles.hoursTitle}>שעות פעילות</Text>
+        {formattedHours ? (
+          <Text style={styles.hoursSubtitle}>{formattedHours}</Text>
+        ) : (
+          <Text style={styles.hoursSubtitle}>בחרו שעת פתיחה וסגירה</Text>
+        )}
+
+        <View style={styles.hoursPickerBlock}>
+          <Text style={styles.hoursPickerLabel}>שעת פתיחה</Text>
+          <View style={styles.hoursOptionsRow}>
+            {HOURS_OPTIONS.map((option) => {
+              const selected = option === business.openingHour;
+              return (
+                <TouchableOpacity
+                  key={`open-${option}`}
+                  onPress={() => setBusiness({ ...business, openingHour: option })}
+                  style={[styles.hourChip, selected && styles.hourChipSelected]}
+                >
+                  <Text
+                    style={[styles.hourChipText, selected && styles.hourChipTextSelected]}
+                  >
+                    {option}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.hoursPickerBlock}>
+          <Text style={styles.hoursPickerLabel}>שעת סגירה</Text>
+          <View style={styles.hoursOptionsRow}>
+            {HOURS_OPTIONS.map((option) => {
+              const selected = option === business.closingHour;
+              return (
+                <TouchableOpacity
+                  key={`close-${option}`}
+                  onPress={() => setBusiness({ ...business, closingHour: option })}
+                  style={[styles.hourChip, selected && styles.hourChipSelected]}
+                >
+                  <Text
+                    style={[styles.hourChipText, selected && styles.hourChipTextSelected]}
+                  >
+                    {option}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
 
       {/* 🟢 אישור אוטומטי */}
       <View style={styles.switchRow}>
@@ -182,20 +310,26 @@ export default function BusinessProfileEdit() {
         )}
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={styles.cancelBtn}
-        onPress={() => router.replace("/BusinessDashboard")}
-      >
-        <Text style={styles.cancelText}>ביטול וחזרה</Text>
-      </TouchableOpacity>
-    </ScrollView>
+        <TouchableOpacity
+          style={styles.cancelBtn}
+          onPress={() => router.replace("/BusinessDashboard")}
+        >
+          <Text style={styles.cancelText}>ביטול וחזרה</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 20,
+  safeArea: {
+    flex: 1,
     backgroundColor: "#f5f7fa",
+  },
+  container: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 40,
     flexGrow: 1,
   },
   header: {
@@ -229,6 +363,53 @@ const styles = StyleSheet.create({
     color: "#333",
     marginTop: 12,
     textAlign: "right",
+  },
+  hoursSection: {
+    marginTop: 24,
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 16,
+  },
+  hoursTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#333",
+    textAlign: "right",
+  },
+  hoursSubtitle: {
+    textAlign: "right",
+    color: "#666",
+    marginTop: 6,
+  },
+  hoursPickerBlock: {
+    marginTop: 16,
+  },
+  hoursPickerLabel: {
+    fontWeight: "700",
+    color: "#444",
+    marginBottom: 8,
+    textAlign: "right",
+  },
+  hoursOptionsRow: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+  },
+  hourChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: "#f0f1f6",
+    margin: 4,
+  },
+  hourChipSelected: {
+    backgroundColor: "#6C63FF",
+  },
+  hourChipText: {
+    color: "#444",
+    fontWeight: "600",
+  },
+  hourChipTextSelected: {
+    color: "#fff",
   },
   switchRow: {
     flexDirection: "row-reverse",
