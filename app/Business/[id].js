@@ -10,11 +10,12 @@ import {
   serverTimestamp,
   where,
 } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,6 +23,107 @@ import {
   View,
 } from "react-native";
 import { auth, db } from "../../firebaseConfig";
+import {
+  WEEK_DAYS,
+  getDisplayWeeklyHoursRows,
+  getWeekdayKeyFromDate,
+} from "../../constants/weekdays";
+
+const clampBookingWindow = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  return Math.min(Math.max(Math.round(parsed), 1), 90);
+};
+
+const clampSlotInterval = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 30;
+  const rounded = Math.round(parsed);
+  return Math.min(Math.max(rounded, 5), 180);
+};
+
+const parseTimeToMinutes = (time) => {
+  if (!/^\d{2}:\d{2}$/.test(time || "")) return NaN;
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const formatMinutesToTime = (value) => {
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+};
+
+const generateTimeSlots = (from, to, step = 30) => {
+  const start = parseTimeToMinutes(from);
+  const end = parseTimeToMinutes(to);
+  const normalizedStep = Number(step);
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    !Number.isFinite(normalizedStep) ||
+    start >= end ||
+    normalizedStep <= 0
+  ) {
+    return [];
+  }
+
+  const slots = [];
+  for (let minutes = start; minutes + normalizedStep <= end; minutes += normalizedStep) {
+    slots.push(formatMinutesToTime(minutes));
+  }
+  return slots;
+};
+
+const resolveOperatingWindowForDay = (business, dayKey) => {
+  if (!business) return null;
+  const schedule = business.weeklyHours?.[dayKey];
+  if (schedule?.closed) {
+    return null;
+  }
+
+  const opening = schedule?.open || business?.openingHour;
+  const closing = schedule?.close || business?.closingHour;
+
+  if (!opening || !closing) {
+    return null;
+  }
+
+  if (parseTimeToMinutes(opening) >= parseTimeToMinutes(closing)) {
+    return null;
+  }
+
+  return { opening, closing };
+};
+
+const formatDateLabel = (date) => {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}.${month}.${year}`;
+};
+
+const formatDateKey = (date) => {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${year}-${month}-${day}`;
+};
+
+const getWeekdayLabels = (dayKey) => {
+  const match = WEEK_DAYS.find((day) => day.key === dayKey);
+  return {
+    full: match?.label ?? "",
+    short: match?.shortLabel ?? "",
+  };
+};
+
+const formatHoursRange = (from, to, fallback) => {
+  if (from && to) {
+    return `${from} – ${to}`;
+  }
+  return fallback || "לא צוין";
+};
 
 export default function BusinessPage() {
   const { id } = useLocalSearchParams(); // זה UID של בעל העסק
@@ -32,21 +134,77 @@ export default function BusinessPage() {
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
 
-  // שעות לבחירה (נשאר כמו שהיה)
-  const hours = [
-    "09:00",
-    "10:00",
-    "11:00",
-    "12:00",
-    "13:00",
-    "14:00",
-    "15:00",
-    "16:00",
-    "17:00",
-  ];
-
   // 🆕 ננהל סט של שעות תפוסות עבור היום הנבחר
   const [bookedTimes, setBookedTimes] = useState(new Set());
+
+  const bookingWindowLimit = useMemo(
+    () => clampBookingWindow(business?.bookingWindowDays),
+    [business?.bookingWindowDays]
+  );
+
+  const bookingIntervalMinutes = useMemo(
+    () => clampSlotInterval(business?.bookingIntervalMinutes),
+    [business?.bookingIntervalMinutes]
+  );
+
+  const dateOptions = useMemo(() => {
+    if (!business) return [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return Array.from({ length: bookingWindowLimit }, (_, index) => {
+      const current = new Date(today);
+      current.setDate(today.getDate() + index);
+      const iso = formatDateKey(current);
+      const dayKey = getWeekdayKeyFromDate(current);
+      const window = resolveOperatingWindowForDay(business, dayKey);
+      const labels = getWeekdayLabels(dayKey);
+
+      return {
+        value: iso,
+        display: formatDateLabel(current),
+        weekdayShort: labels.short,
+        disabled:
+          !window ||
+          generateTimeSlots(
+            window.opening,
+            window.closing,
+            bookingIntervalMinutes
+          ).length === 0,
+      };
+    });
+  }, [bookingIntervalMinutes, bookingWindowLimit, business]);
+
+  const hasAvailableDates = useMemo(
+    () => dateOptions.some((option) => !option.disabled),
+    [dateOptions]
+  );
+
+  const availableHours = useMemo(() => {
+    if (!selectedDate) return [];
+
+    const dayKey = getWeekdayKeyFromDate(selectedDate);
+    if (!dayKey) return [];
+
+    const window = resolveOperatingWindowForDay(business, dayKey);
+    if (!window) {
+      return [];
+    }
+
+    return generateTimeSlots(
+      window.opening,
+      window.closing,
+      bookingIntervalMinutes
+    );
+  }, [bookingIntervalMinutes, business, selectedDate]);
+
+  const displayWeeklyHours = useMemo(
+    () => getDisplayWeeklyHoursRows(business?.weeklyHours),
+    [business?.weeklyHours]
+  );
+
+  const hasWeeklyHours = displayWeeklyHours.length > 0;
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
   useEffect(() => {
@@ -63,6 +221,30 @@ export default function BusinessPage() {
     };
     fetchBusiness();
   }, [id]);
+
+  useEffect(() => {
+    if (selectedTime && !availableHours.includes(selectedTime)) {
+      setSelectedTime("");
+    }
+  }, [availableHours, selectedTime]);
+
+  useEffect(() => {
+    if (!dateOptions.length) return;
+    const firstEnabled = dateOptions.find((option) => !option.disabled);
+    if (!firstEnabled) return;
+
+    setSelectedDate((prev) => {
+      if (
+        prev &&
+        dateOptions.some(
+          (option) => option.value === prev && !option.disabled
+        )
+      ) {
+        return prev;
+      }
+      return firstEnabled.value;
+    });
+  }, [dateOptions]);
 
   // 🆕 שליפת שעות תפוסות ליום הנבחר עבור העסק הזה
   useEffect(() => {
@@ -95,6 +277,14 @@ export default function BusinessPage() {
 
     if (!selectedDate || !selectedTime) {
       Alert.alert("חסר מידע", "אנא בחר יום ושעה");
+      return;
+    }
+
+    if (!availableHours.includes(selectedTime)) {
+      Alert.alert(
+        "שעה לא זמינה",
+        "השעה שנבחרה אינה תואמת את שעות הפעילות של העסק"
+      );
       return;
     }
 
@@ -157,6 +347,37 @@ export default function BusinessPage() {
       </View>
     );
 
+  const hoursLabel = formatHoursRange(
+    business?.openingHour,
+    business?.closingHour,
+    business?.hours
+  );
+
+  const handleNavigation = async (provider) => {
+    if (!business?.address) {
+      Alert.alert("לא נמצאה כתובת", "העסק לא הגדיר כתובת לניווט");
+      return;
+    }
+
+    const encodedAddress = encodeURIComponent(business.address);
+    const url =
+      provider === "waze"
+        ? `https://waze.com/ul?q=${encodedAddress}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert("שגיאה", "לא ניתן לפתוח את אפליקציית הניווט המבוקשת");
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (error) {
+      console.error("שגיאה בפתיחת ניווט", error);
+      Alert.alert("שגיאה", "אירעה תקלה בעת ניסיון פתיחת הניווט");
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       {/* 🔹 כותרת */}
@@ -180,78 +401,143 @@ export default function BusinessPage() {
       <Text style={styles.name}>{business.name}</Text>
       <Text style={styles.category}>{business.category}</Text>
       <Text style={styles.desc}>{business.description}</Text>
-      <Text style={styles.info}>📍 {business.address}</Text>
-      <Text style={styles.info}>📞 {business.phone}</Text>
-      <Text style={styles.info}>🕒 {business.hours}</Text>
+      <View style={styles.infoRow}>
+        <Text style={styles.infoValue}>{business.address || "לא צוינה כתובת"}</Text>
+        <Ionicons name="location-outline" size={18} color="#6C63FF" />
+      </View>
+      {business.address ? (
+        <View style={styles.navigationRow}>
+          <TouchableOpacity
+            style={styles.navigationBtn}
+            onPress={() => handleNavigation("waze")}
+          >
+            <Ionicons name="navigate-outline" size={16} color="#6C63FF" />
+            <Text style={styles.navigationText}>פתח ב-Waze</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.navigationBtn}
+            onPress={() => handleNavigation("google")}
+          >
+            <Ionicons name="map-outline" size={16} color="#6C63FF" />
+            <Text style={styles.navigationText}>פתח במפות</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      <View style={styles.hoursContainerBox}>
+        <Text style={styles.hoursTitle}>🕒 שעות פעילות</Text>
+        {hasWeeklyHours ? (
+          displayWeeklyHours.map((row) => (
+            <View key={row.key} style={styles.hoursRow}>
+              <Text style={styles.hoursDay}>{row.label}</Text>
+              <Text style={styles.hoursValue}>{row.text}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.hoursFallback}>{hoursLabel}</Text>
+        )}
+      </View>
 
       {/* 🔹 בחירת תאריך */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>בחר תאריך</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          {["2025-10-26", "2025-10-27", "2025-10-28", "2025-10-29"].map(
-            (date) => (
+        <Text style={styles.sectionTitle}>
+          בחר תאריך ({bookingWindowLimit} ימים קדימה)
+        </Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.dateScroll}
+        >
+          {dateOptions.map((option) => {
+            const isSelected = selectedDate === option.value;
+            return (
               <TouchableOpacity
-                key={date}
-                onPress={() => setSelectedDate(date)}
+                key={option.value}
+                onPress={() => !option.disabled && setSelectedDate(option.value)}
                 style={[
                   styles.dateBtn,
-                  selectedDate === date && styles.selectedBtn,
+                  isSelected && styles.selectedBtn,
+                  option.disabled && styles.dateDisabled,
                 ]}
+                disabled={option.disabled}
               >
+                <Text
+                  style={[
+                    styles.dateWeekday,
+                    isSelected && styles.selectedDateText,
+                    option.disabled && styles.dateDisabledText,
+                  ]}
+                >
+                  {option.weekdayShort}
+                </Text>
                 <Text
                   style={[
                     styles.dateText,
-                    selectedDate === date && styles.selectedText,
+                    isSelected && styles.selectedDateText,
+                    option.disabled && styles.dateDisabledText,
                   ]}
                 >
-                  {date.split("-").reverse().join(".")}
-                </Text>
-              </TouchableOpacity>
-            )
-          )}
-        </ScrollView>
-      </View>
-
-      {/* 🔹 בחירת שעה (עם ניטרול שעות תפוסות) */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>בחר שעה</Text>
-        <View style={styles.hoursContainer}>
-          {hours.map((h) => {
-            const isBooked = bookedTimes.has(h);
-            const isSelected = selectedTime === h;
-            return (
-              <TouchableOpacity
-                key={h}
-                onPress={() => !isBooked && setSelectedTime(h)}
-                disabled={isBooked}
-                style={[
-                  styles.hourBtn,
-                  isSelected && styles.selectedBtn,
-                  isBooked && styles.hourDisabled,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.hourText,
-                    isSelected && styles.selectedText,
-                    isBooked && { color: "#999" },
-                  ]}
-                >
-                  {h}
+                  {option.display}
                 </Text>
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
+        {!hasAvailableDates && (
+          <Text style={styles.emptyState}>
+            אין תאריכים זמינים על פי ההגדרות הנוכחיות
+          </Text>
+        )}
+      </View>
+
+      {/* 🔹 בחירת שעה */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>בחר שעה</Text>
+        {availableHours.length ? (
+          <View style={styles.hoursContainer}>
+            {availableHours.map((h) => {
+              const disabled = bookedTimes.has(h);
+              const selected = selectedTime === h;
+              return (
+                <TouchableOpacity
+                  key={h}
+                  disabled={disabled}
+                  onPress={() => setSelectedTime(h)}
+                  style={[
+                    styles.hourBtn,
+                    disabled && styles.disabledHour,
+                    selected && styles.selectedHour,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.hourText,
+                      disabled && styles.disabledHourText,
+                      selected && styles.selectedHourText,
+                    ]}
+                  >
+                    {h}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.emptyState}>
+            אין שעות פעילות לתאריך שבחרת
+          </Text>
+        )}
       </View>
 
       {/* 🔹 כפתור קביעת תור */}
       <TouchableOpacity
-        style={[styles.bookBtn, (!selectedDate || !selectedTime) && { opacity: 0.7 }]}
+        style={[
+          styles.bookBtn,
+          (!selectedDate || !selectedTime) && { opacity: 0.7 },
+        ]}
         onPress={handleBooking}
         disabled={!selectedDate || !selectedTime}
       >
-        <Text style={styles.bookText}>קבע תור עכשיו</Text>
+        <Text style={styles.bookBtnText}>קבע תור עכשיו</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -260,6 +546,7 @@ export default function BusinessPage() {
 const styles = StyleSheet.create({
   container: {
     padding: 20,
+    paddingBottom: 40,
     backgroundColor: "#f5f7fa",
   },
   center: {
@@ -267,10 +554,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  backBtn: {
-    alignSelf: "flex-start",
-    marginBottom: 10,
-  },
+  backBtn: { alignSelf: "flex-start", marginBottom: 10 },
   image: {
     width: "100%",
     height: 200,
@@ -281,10 +565,10 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 200,
     borderRadius: 20,
-    backgroundColor: "#eee",
-    alignItems: "center",
-    justifyContent: "center",
     marginBottom: 15,
+    backgroundColor: "#eee",
+    justifyContent: "center",
+    alignItems: "center",
   },
   name: {
     fontSize: 24,
@@ -304,10 +588,69 @@ const styles = StyleSheet.create({
     color: "#555",
     marginBottom: 10,
   },
-  info: {
-    textAlign: "right",
-    color: "#444",
+  infoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 8,
+    marginBottom: 4,
+  },
+  infoValue: {
+    color: "#333",
     fontSize: 14,
+    fontWeight: "600",
+    textAlign: "right",
+  },
+  navigationRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+    marginBottom: 6,
+  },
+  navigationBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#eef0ff",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  navigationText: {
+    color: "#454aa0",
+    fontWeight: "700",
+  },
+  hoursContainerBox: {
+    marginTop: 12,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
+  },
+  hoursTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  hoursRow: {
+    flexDirection: "row-reverse",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  hoursDay: {
+    color: "#555",
+    fontWeight: "600",
+    textAlign: "right",
+  },
+  hoursValue: {
+    color: "#333",
+    fontWeight: "700",
+    textAlign: "left",
+  },
+  hoursFallback: {
+    color: "#666",
+    textAlign: "right",
   },
   section: {
     marginTop: 20,
@@ -319,19 +662,58 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     textAlign: "right",
   },
+  dateScroll: {
+    flexDirection: "row",
+    justifyContent: "flex-start",
+    gap: 12,
+    paddingHorizontal: 4,
+  },
   dateBtn: {
+    width: 110,
     backgroundColor: "#fff",
-    borderRadius: 15,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    marginRight: 10,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginLeft: 0,
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#e0e3ef",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  selectedBtn: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  dateWeekday: {
+    fontSize: 12,
+    color: "#6C63FF",
+    fontWeight: "700",
+  },
+  dateText: {
+    color: "#333",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  selectedDateText: {
+    color: "#fff",
+  },
+  dateDisabled: {
+    backgroundColor: "#f1f2f6",
+    borderColor: "#e6e7ef",
+  },
+  dateDisabledText: {
+    color: "#b5b8c9",
   },
   hoursContainer: {
     flexDirection: "row-reverse",
     flexWrap: "wrap",
-    gap: 8,
+  },
+  emptyState: {
+    textAlign: "center",
+    color: "#7c8095",
+    fontWeight: "600",
+    paddingVertical: 12,
   },
   hourBtn: {
     backgroundColor: "#fff",
@@ -340,25 +722,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     borderWidth: 1,
     borderColor: "#ddd",
-  },
-  hourDisabled: {
-    backgroundColor: "#eee",
-    borderColor: "#eee",
-  },
-  selectedBtn: {
-    backgroundColor: "#6C63FF",
-    borderColor: "#6C63FF",
-  },
-  dateText: {
-    color: "#333",
-    fontWeight: "600",
+    marginLeft: 10,
+    marginBottom: 10,
   },
   hourText: {
     color: "#333",
     fontWeight: "600",
   },
-  selectedText: {
+  selectedHour: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  selectedHourText: {
     color: "#fff",
+  },
+  disabledHour: {
+    backgroundColor: "#eee",
+    borderColor: "#eee",
+  },
+  disabledHourText: {
+    color: "#aaa",
   },
   bookBtn: {
     marginTop: 30,
@@ -367,7 +750,7 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
   },
-  bookText: {
+  bookBtnText: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "800",
