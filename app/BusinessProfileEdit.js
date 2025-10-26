@@ -29,6 +29,8 @@ import {
   sanitizeWeeklyHours,
 } from "../constants/weekdays";
 
+const BOOKING_WINDOW_PRESETS = [7, 14, 21, 30];
+
 const timeToMinutes = (time) => {
   if (!/^\d{2}:\d{2}$/.test(time)) return NaN;
   const [hours, minutes] = time.split(":").map(Number);
@@ -50,6 +52,8 @@ export default function BusinessProfileEdit() {
   const [saving, setSaving] = useState(false);
   const [activePicker, setActivePicker] = useState(null);
   const [iosPickerValue, setIosPickerValue] = useState(new Date());
+  const [bookingWindowDays, setBookingWindowDays] = useState(30);
+  const [bookingWindowInput, setBookingWindowInput] = useState("30");
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -111,6 +115,13 @@ export default function BusinessProfileEdit() {
             ...data,
             autoApprove: data.autoApprove ?? false,
           }));
+
+          const parsedWindow = Number(data.bookingWindowDays);
+          const sanitizedWindow = Number.isFinite(parsedWindow)
+            ? Math.min(Math.max(Math.round(parsedWindow), 1), 90)
+            : 30;
+          setBookingWindowDays(sanitizedWindow);
+          setBookingWindowInput(String(sanitizedWindow));
         }
       } catch (err) {
         console.error("שגיאה בשליפת נתוני עסק:", err);
@@ -226,6 +237,14 @@ export default function BusinessProfileEdit() {
       validatedWeekly[day.key] = { open, close, closed };
     });
 
+    if (!Number.isInteger(bookingWindowDays) || bookingWindowDays < 1) {
+      errors.push("יש להזין מספר ימים תקין לטווח קביעת התורים");
+    }
+
+    if (bookingWindowDays > 90) {
+      errors.push("ניתן להגדיר עד 90 ימים קדימה לפתיחת יומן התורים");
+    }
+
     if (errors.length) {
       Alert.alert("שגיאה", errors[0]);
       return;
@@ -264,6 +283,7 @@ export default function BusinessProfileEdit() {
         image: business.image,
         autoApprove: business.autoApprove,
         weeklyHours: validatedWeekly,
+        bookingWindowDays,
         ownerId: user.uid,
         updatedAt: serverTimestamp(),
       };
@@ -417,6 +437,62 @@ export default function BusinessProfileEdit() {
             </View>
           );
         })}
+      </View>
+
+      <View style={styles.bookingWindowCard}>
+        <Text style={styles.bookingWindowTitle}>טווח פתיחת תורים</Text>
+        <Text style={styles.bookingWindowSubtitle}>
+          כמה ימים קדימה הלקוחות יכולים לקבוע תור (מתעדכן בכל יום מחדש)
+        </Text>
+        <View style={styles.bookingWindowPresets}>
+          {BOOKING_WINDOW_PRESETS.map((days) => {
+            const isSelected = bookingWindowDays === days;
+            return (
+              <TouchableOpacity
+                key={days}
+                style={[
+                  styles.bookingWindowChip,
+                  isSelected && styles.bookingWindowChipSelected,
+                ]}
+                onPress={() => {
+                  setBookingWindowDays(days);
+                  setBookingWindowInput(String(days));
+                }}
+              >
+                <Text
+                  style={[
+                    styles.bookingWindowChipText,
+                    isSelected && styles.bookingWindowChipTextSelected,
+                  ]}
+                >
+                  {days} ימים
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <View style={styles.bookingWindowCustomRow}>
+          <Text style={styles.bookingWindowCustomLabel}>
+            או הזן מספר ימים מותאם אישית (עד 90)
+          </Text>
+          <TextInput
+            style={styles.bookingWindowInput}
+            keyboardType="number-pad"
+            value={bookingWindowInput}
+            onChangeText={(value) => {
+              const digits = value.replace(/[^0-9]/g, "");
+              setBookingWindowInput(digits);
+              const parsed = parseInt(digits, 10);
+              if (Number.isFinite(parsed)) {
+                setBookingWindowDays(parsed);
+              } else {
+                setBookingWindowDays(0);
+              }
+            }}
+            placeholder="30"
+            maxLength={3}
+          />
+        </View>
       </View>
 
       {/* 🟢 אישור אוטומטי */}
@@ -618,6 +694,73 @@ const styles = StyleSheet.create({
     borderRadius: 15,
   },
   switchLabel: { color: "#333", fontWeight: "700", fontSize: 16 },
+  bookingWindowCard: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    padding: 18,
+    marginTop: 24,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: "#eef1fb",
+  },
+  bookingWindowTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    textAlign: "right",
+    color: "#333",
+  },
+  bookingWindowSubtitle: {
+    textAlign: "right",
+    color: "#666",
+    lineHeight: 20,
+  },
+  bookingWindowPresets: {
+    flexDirection: "row-reverse",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  bookingWindowChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d6dbf5",
+    backgroundColor: "#f6f7ff",
+  },
+  bookingWindowChipSelected: {
+    backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+  },
+  bookingWindowChipText: {
+    color: "#4a4f66",
+    fontWeight: "700",
+  },
+  bookingWindowChipTextSelected: {
+    color: "#fff",
+  },
+  bookingWindowCustomRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  bookingWindowCustomLabel: {
+    flex: 1,
+    textAlign: "right",
+    color: "#444",
+    fontWeight: "600",
+  },
+  bookingWindowInput: {
+    width: 80,
+    backgroundColor: "#f4f6ff",
+    borderRadius: 12,
+    paddingVertical: 10,
+    textAlign: "center",
+    borderWidth: 1,
+    borderColor: "#dce1f6",
+    fontWeight: "700",
+    color: "#333",
+  },
   saveBtn: {
     backgroundColor: "#6C63FF",
     paddingVertical: 15,

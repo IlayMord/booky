@@ -130,6 +130,12 @@ export default function BusinessDashboard() {
     datasets: [{ data: Object.values(monthlyStats) }],
   };
 
+  const bookingWindowDays = (() => {
+    const parsed = Number(business?.bookingWindowDays);
+    if (!Number.isFinite(parsed)) return 30;
+    return Math.min(Math.max(Math.round(parsed), 1), 90);
+  })();
+
   if (loading)
     return (
       <SafeAreaView style={styles.center}>
@@ -157,6 +163,9 @@ export default function BusinessDashboard() {
           <Text style={styles.businessName}>{business?.name}</Text>
           <Text style={styles.businessInfo}>📞 {business?.phone || "-"}</Text>
           <Text style={styles.businessInfo}>📍 {business?.address || "-"}</Text>
+          <Text style={styles.businessInfo}>
+            🗓️ פתיחת יומן: {bookingWindowDays} ימים קדימה
+          </Text>
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
