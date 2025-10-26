@@ -189,6 +189,75 @@ export default function BusinessDashboard() {
           <Text style={styles.businessInfo}>
             🗓️ פתיחת יומן: {bookingWindowDays} ימים קדימה
           </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              condensedWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              dedupedWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {legacyHoursFallback}
+              </Text>
+            )}
+          </View>
           <Text style={styles.businessInfo}>
             ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
           </Text>
