@@ -544,6 +544,8 @@ export default function BusinessProfileEdit() {
                 }}
                 display="spinner"
                 locale="he-IL"
+                themeVariant="light"
+                textColor="#111827"
               />
               <View style={styles.modalActions}>
                 <TouchableOpacity

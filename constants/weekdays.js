@@ -24,6 +24,24 @@ export const createEmptyWeeklyHours = () =>
     return acc;
   }, {});
 
+const normalizeClosedFlag = (value) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["false", "0", "no", "off", ""].includes(normalized)) {
+      return false;
+    }
+    if (["true", "1", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+  }
+
+  return Boolean(value);
+};
+
 export const sanitizeWeeklyHours = (value) => {
   const base = createEmptyWeeklyHours();
   if (!value || typeof value !== "object") {
@@ -33,10 +51,15 @@ export const sanitizeWeeklyHours = (value) => {
   WEEK_DAYS.forEach((day) => {
     const existing = value[day.key];
     if (existing && typeof existing === "object") {
+      const open =
+        typeof existing.open === "string" ? existing.open.trim() : "";
+      const close =
+        typeof existing.close === "string" ? existing.close.trim() : "";
+
       base[day.key] = {
-        open: typeof existing.open === "string" ? existing.open : "",
-        close: typeof existing.close === "string" ? existing.close : "",
-        closed: Boolean(existing.closed),
+        open,
+        close,
+        closed: normalizeClosedFlag(existing.closed),
       };
     }
   });
@@ -46,7 +69,18 @@ export const sanitizeWeeklyHours = (value) => {
 
 export const getWeekdayKeyFromDate = (dateInput) => {
   if (!dateInput) return null;
-  const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+
+  let date = dateInput;
+  if (typeof dateInput === "string") {
+    const isoMatch = dateInput.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+    } else {
+      date = new Date(dateInput);
+    }
+  }
+
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
     return null;
   }
