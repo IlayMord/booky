@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { collection, getDocs } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -18,6 +19,26 @@ import { auth, db } from "../firebaseConfig";
 
 const screenWidth = Dimensions.get("window").width;
 
+const derivePreferredName = (user, profileData) => {
+  if (profileData) {
+    const raw =
+      profileData.fullName ||
+      profileData.displayName ||
+      profileData.name ||
+      profileData.firstName;
+    if (raw) {
+      return raw.trim().split(" ")[0];
+    }
+  }
+  if (user?.displayName) {
+    return user.displayName.trim().split(" ")[0];
+  }
+  if (user?.email) {
+    return user.email.split("@")[0];
+  }
+  return "";
+};
+
 export default function HomeClient() {
   const [businesses, setBusinesses] = useState([]);
   const [filtered, setFiltered] = useState([]);
@@ -25,17 +46,20 @@ export default function HomeClient() {
   const [selectedCategory, setSelectedCategory] = useState("הכול");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [userName, setUserName] = useState("");
+  const [userName, setUserName] = useState(null);
   const router = useRouter();
 
-  // ✅ שליפת עסקים מ-Firestore
+  // ✅ שליפת עסקים והאזנה למצב המשתמש
   useEffect(() => {
+    let isMounted = true;
+
     const fetchBusinesses = async () => {
       try {
         const querySnap = await getDocs(collection(db, "businesses"));
-        const data = querySnap.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
+        if (!isMounted) return;
+        const data = querySnap.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
         }));
         setBusinesses(data);
         setFiltered(data);
@@ -44,18 +68,45 @@ export default function HomeClient() {
       } catch (error) {
         console.error("❌ שגיאה בשליפת עסקים:", error);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
-    // שם המשתמש
-    const user = auth.currentUser;
-    if (user) {
-      setUserName(user.displayName?.split(" ")[0] || "משתמש");
-    }
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!isMounted) return;
+      if (!user) {
+        setUserName("אורח");
+        return;
+      }
+
+      const fallbackName = derivePreferredName(user);
+      setUserName(fallbackName || "אורח");
+
+      try {
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        const profileName = derivePreferredName(user, data);
+        if (profileName) {
+          setUserName(profileName);
+        }
+      } catch (error) {
+        console.error("❌ שגיאה בשליפת משתמש:", error);
+      }
+    });
 
     fetchBusinesses();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
+
+  const heroName = userName ?? "";
 
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
   useEffect(() => {
@@ -71,7 +122,7 @@ export default function HomeClient() {
       );
     }
     setFiltered(results);
-  }, [search, selectedCategory]);
+  }, [businesses, search, selectedCategory]);
 
   if (loading)
     return (
@@ -85,6 +136,12 @@ export default function HomeClient() {
     <SafeAreaView style={styles.container}>
       {/* ===== Header ===== */}
       <View style={styles.header}>
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.greeting}>
+            {heroName ? `ברוך הבא, ${heroName} 👋` : "ברוך הבא 👋"}
+          </Text>
+          <Text style={styles.subGreeting}>מצא את השירות המושלם עבורך</Text>
+        </View>
         <TouchableOpacity onPress={() => router.push("/Profile")}>
           <Image
             source={{
@@ -93,11 +150,22 @@ export default function HomeClient() {
             style={styles.avatar}
           />
         </TouchableOpacity>
+      </View>
 
-        <View style={{ flex: 1, alignItems: "flex-end" }}>
-          <Text style={styles.greeting}>ברוך הבא, {userName} 👋</Text>
-          <Text style={styles.subGreeting}>גלה עסקים סביבך</Text>
+      {/* ===== Hero ===== */}
+      <View style={styles.heroCard}>
+        <View style={styles.heroText}>
+          <Text style={styles.heroTitle}>תורים זמינים בלחיצה</Text>
+          <Text style={styles.heroSubtitle}>
+            עיין בעסקים מובילים, סנן לפי תחום, וקבע תור בלחיצה אחת.
+          </Text>
         </View>
+        <Image
+          source={{
+            uri: "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=200&q=60",
+          }}
+          style={styles.heroImage}
+        />
       </View>
 
       {/* ===== Search ===== */}
@@ -114,35 +182,45 @@ export default function HomeClient() {
       </View>
 
       {/* ===== Categories ===== */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.categoriesContainer}
-      >
-        {categories.map((cat, i) => {
-          const selected = cat === selectedCategory;
-          return (
-            <TouchableOpacity
-              key={i}
-              onPress={() => setSelectedCategory(cat)}
-              style={[
-                styles.categoryBtn,
-                selected && styles.categorySelected,
-                { elevation: selected ? 4 : 0 },
-              ]}
-            >
-              <Text
+      <View style={styles.categoriesWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoriesContainer}
+        >
+          {categories.map((cat, i) => {
+            const selected = cat === selectedCategory;
+            return (
+              <TouchableOpacity
+                key={i}
+                onPress={() => setSelectedCategory(cat)}
                 style={[
-                  styles.categoryText,
-                  selected && styles.categoryTextSelected,
+                  styles.categoryBtn,
+                  selected && styles.categorySelected,
                 ]}
+                activeOpacity={0.85}
               >
-                {cat}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+                <Ionicons
+                  name={selected ? "checkmark-circle" : "ellipse-outline"}
+                  size={16}
+                  color={selected ? "#fff" : "#9aa3c4"}
+                  style={styles.categoryIcon}
+                />
+                <Text
+                  style={[
+                    styles.categoryText,
+                    selected && styles.categoryTextSelected,
+                  ]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {cat}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       {/* ===== Business Cards ===== */}
       <ScrollView
@@ -191,8 +269,9 @@ const styles = StyleSheet.create({
   rtl: { textAlign: "right", writingDirection: "rtl" },
   container: {
     flex: 1,
-    backgroundColor: "#f5f7fa",
+    backgroundColor: "#f3f5ff",
     paddingHorizontal: 20,
+    paddingTop: 10,
   },
   center: {
     flex: 1,
@@ -203,65 +282,144 @@ const styles = StyleSheet.create({
   /* HEADER */
   header: {
     marginTop: 5,
-    marginBottom: 15,
+    marginBottom: 18,
     flexDirection: "row-reverse",
     alignItems: "center",
   },
+  headerTextWrap: {
+    flex: 1,
+    alignItems: "flex-end",
+    paddingRight: 6,
+  },
   avatar: {
-    width: 45,
-    height: 45,
-    borderRadius: 25,
-    backgroundColor: "#ddd",
-    marginLeft: 10,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#e7e9ff",
+    marginLeft: 12,
+    borderWidth: 1,
+    borderColor: "#d8dcff",
   },
   greeting: {
-    fontSize: 22,
+    fontSize: 23,
     fontWeight: "700",
-    color: "#333",
+    color: "#1f2937",
   },
   subGreeting: {
     fontSize: 14,
-    color: "#777",
+    color: "#5b6473",
+    marginTop: 4,
+  },
+  heroCard: {
+    backgroundColor: "#6C63FF",
+    borderRadius: 28,
+    paddingVertical: 20,
+    paddingHorizontal: 22,
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    marginBottom: 22,
+    shadowColor: "#6C63FF",
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+  heroText: {
+    flex: 1,
+    alignItems: "flex-end",
+  },
+  heroTitle: {
+    color: "#fff",
+    fontSize: 21,
+    fontWeight: "800",
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    color: "rgba(255,255,255,0.88)",
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "right",
+  },
+  heroImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 24,
+    marginLeft: 18,
   },
   /* SEARCH */
   searchRow: {
     flexDirection: "row-reverse",
     alignItems: "center",
     backgroundColor: "#fff",
-    borderRadius: 15,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
     shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
     elevation: 2,
-    marginBottom: 15,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: "#e3e7ff",
   },
   searchInput: {
     flex: 1,
-    marginRight: 10,
+    marginRight: 12,
     fontSize: 16,
-    color: "#333",
+    color: "#1f2937",
   },
   /* CATEGORIES */
+  categoriesWrapper: {
+    backgroundColor: "#fff",
+    borderRadius: 28,
+    paddingVertical: 6,
+    paddingRight: 10,
+    borderWidth: 1,
+    borderColor: "#e0e6ff",
+    shadowColor: "#1f2359",
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    elevation: 2,
+    marginBottom: 22,
+  },
   categoriesContainer: {
     flexDirection: "row-reverse",
-    paddingVertical: 10,
+    paddingVertical: 16,
+    alignItems: "center",
+    paddingLeft: 12,
   },
   categoryBtn: {
-    backgroundColor: "#eee",
-    borderRadius: 20,
-    paddingVertical: 8,
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    paddingVertical: 10,
     paddingHorizontal: 16,
-    marginLeft: 8,
+    marginHorizontal: 6,
+    borderWidth: 1,
+    borderColor: "#e0e3ef",
+    width: 120,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+    flexDirection: "row-reverse",
   },
   categorySelected: {
     backgroundColor: "#6C63FF",
+    borderColor: "#6C63FF",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  categoryIcon: {
+    marginLeft: 8,
   },
   categoryText: {
     color: "#3e3e63",
-    fontWeight: "600",
-    fontSize: 14,
+    fontWeight: "700",
+    fontSize: 15,
+    textAlign: "center",
   },
   categoryTextSelected: {
     color: "#fff",
@@ -269,35 +427,40 @@ const styles = StyleSheet.create({
   /* BUSINESS CARD */
   businessCard: {
     backgroundColor: "#fff",
-    borderRadius: 20,
-    marginBottom: 15,
-    shadowColor: "#000",
+    borderRadius: 24,
+    marginBottom: 18,
+    shadowColor: "#1f2359",
     shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowRadius: 14,
+    elevation: 4,
     overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#e6e9ff",
   },
   businessImage: {
     width: "100%",
-    height: screenWidth * 0.45,
+    height: screenWidth * 0.42,
   },
   businessContent: {
-    padding: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    alignItems: "flex-end",
   },
   businessName: {
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: "800",
-    color: "#333",
+    color: "#111827",
   },
   businessCategory: {
     color: "#6C63FF",
     fontWeight: "600",
-    marginBottom: 5,
+    marginBottom: 4,
   },
   businessDesc: {
-    color: "#777",
+    color: "#5b6473",
     fontSize: 14,
     lineHeight: 20,
+    marginTop: 2,
   },
   /* EMPTY */
   noResults: {
