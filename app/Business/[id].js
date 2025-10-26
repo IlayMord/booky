@@ -232,12 +232,13 @@ export default function BusinessPage() {
         const ref = doc(db, "businesses", id);
         const snap = await getDoc(ref);
         if (snap.exists()) {
-          const data = snap.data();
-          const { condensedWeeklyHours, weeklyHours, ...businessData } =
-            data || {};
+          const rawData = snap.data() || {};
           const normalizedWeeklyHours = sanitizeWeeklyHours(
-            weeklyHours || condensedWeeklyHours
+            snap.get("weeklyHours") || snap.get("condensedWeeklyHours")
           );
+          const businessData = { ...rawData };
+          delete businessData.weeklyHours;
+          delete businessData.condensedWeeklyHours;
 
           setBusiness({
             id: snap.id,

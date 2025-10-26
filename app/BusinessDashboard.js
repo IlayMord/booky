@@ -59,12 +59,13 @@ export default function BusinessDashboard() {
         const snap = await getDoc(ref);
 
         if (snap.exists()) {
-          const data = snap.data();
-          const { condensedWeeklyHours, weeklyHours, ...businessData } =
-            data || {};
+          const rawData = snap.data() || {};
           const normalizedWeeklyHours = sanitizeWeeklyHours(
-            weeklyHours || condensedWeeklyHours
+            snap.get("weeklyHours") || snap.get("condensedWeeklyHours")
           );
+          const businessData = { ...rawData };
+          delete businessData.weeklyHours;
+          delete businessData.condensedWeeklyHours;
 
           setBusiness({
             id: snap.id,
@@ -236,6 +237,24 @@ export default function BusinessDashboard() {
             ) : (
               <Text style={styles.weeklyHoursFallback}>
                 {business?.hours || "לא צוינו שעות פעילות"}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.businessInfo}>
+            ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
+          </Text>
+          <View style={styles.weeklyHoursContainer}>
+            <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
+            {hasWeeklyHours ? (
+              displayWeeklyHours.map((row) => (
+                <View key={row.key} style={styles.weeklyHoursRow}>
+                  <Text style={styles.weeklyHoursDay}>{row.label}</Text>
+                  <Text style={styles.weeklyHoursValue}>{row.text}</Text>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.weeklyHoursFallback}>
+                {legacyHoursFallback}
               </Text>
             )}
           </View>
