@@ -74,7 +74,7 @@ export default function HomeClient() {
       }
     };
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
@@ -84,41 +84,23 @@ export default function HomeClient() {
       const fallbackName = derivePreferredName(user);
       setUserName(fallbackName || "אורח");
 
-      try {
-        const ref = doc(db, "users", user.uid);
-        const snap = await getDoc(ref);
-        if (!snap.exists()) return;
-        const data = snap.data();
-        const profileName = derivePreferredName(user, data);
-        if (profileName) {
-          setUserName(profileName);
+      const loadProfile = async () => {
+        try {
+          const ref = doc(db, "users", user.uid);
+          const snap = await getDoc(ref);
+          if (!snap.exists()) return;
+          const data = snap.data();
+          const profileName = derivePreferredName(user, data);
+          if (profileName && isMounted) {
+            setUserName(profileName);
+          }
+        } catch (error) {
+          console.error("❌ שגיאה בשליפת משתמש:", error);
         }
-      } catch (error) {
-        console.error("❌ שגיאה בשליפת משתמש:", error);
-      }
+      };
+
+      loadProfile();
     });
-
-      const fallback = user.displayName?.trim();
-      if (fallback && isMounted) {
-        setUserName(fallback.split(" ")[0]);
-      } else if (isMounted && user.email) {
-        setUserName(user.email.split("@")[0]);
-      }
-
-      try {
-        const ref = doc(db, "users", user.uid);
-        const snap = await getDoc(ref);
-        if (!snap.exists()) return;
-        const data = snap.data();
-        const fullName =
-          data.fullName || data.name || data.firstName || data.displayName;
-        if (fullName && isMounted) {
-          setUserName(fullName.split(" ")[0]);
-        }
-      } catch (error) {
-        console.error("❌ שגיאה בשליפת משתמש:", error);
-      }
-    };
 
     hydrateUserName();
     fetchBusinesses();
