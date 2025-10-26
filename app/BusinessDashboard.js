@@ -112,17 +112,32 @@ export default function BusinessDashboard() {
     [business?.weeklyHours]
   );
 
-  const hasWeeklyHours = useMemo(
-    () =>
-      weeklyHoursRows.some(
-        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
-      ),
-    [weeklyHoursRows]
-  );
-
   const condensedWeeklyHours = useMemo(
     () => summarizeWeeklyHoursRows(weeklyHoursRows),
     [weeklyHoursRows]
+  );
+
+  const dedupedWeeklyHours = useMemo(() => {
+    const seen = new Set();
+    return condensedWeeklyHours.filter((row) => {
+      if (!row?.text) {
+        return false;
+      }
+      const signature = `${row.label ?? ""}|${row.text}`;
+      if (seen.has(signature)) {
+        return false;
+      }
+      seen.add(signature);
+      return true;
+    });
+  }, [condensedWeeklyHours]);
+
+  const hasWeeklyHours = useMemo(
+    () =>
+      dedupedWeeklyHours.some(
+        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
+      ),
+    [dedupedWeeklyHours]
   );
 
   // ===== 🔹 נתונים לגרף =====
@@ -251,7 +266,7 @@ export default function BusinessDashboard() {
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
-              weeklyHoursRows.map((row) => (
+              condensedWeeklyHours.map((row) => (
                 <View key={row.key} style={styles.weeklyHoursRow}>
                   <Text style={styles.weeklyHoursDay}>{row.label}</Text>
                   <Text style={styles.weeklyHoursValue}>{row.text}</Text>
@@ -269,7 +284,7 @@ export default function BusinessDashboard() {
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
-              condensedWeeklyHours.map((row) => (
+              dedupedWeeklyHours.map((row) => (
                 <View key={row.key} style={styles.weeklyHoursRow}>
                   <Text style={styles.weeklyHoursDay}>{row.label}</Text>
                   <Text style={styles.weeklyHoursValue}>{row.text}</Text>

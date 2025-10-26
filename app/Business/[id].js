@@ -205,17 +205,32 @@ export default function BusinessPage() {
     [business?.weeklyHours]
   );
 
-  const hasWeeklyHours = useMemo(
-    () =>
-      weeklyHoursRows.some(
-        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
-      ),
-    [weeklyHoursRows]
-  );
-
   const condensedWeeklyHours = useMemo(
     () => summarizeWeeklyHoursRows(weeklyHoursRows),
     [weeklyHoursRows]
+  );
+
+  const dedupedWeeklyHours = useMemo(() => {
+    const seen = new Set();
+    return condensedWeeklyHours.filter((row) => {
+      if (!row?.text) {
+        return false;
+      }
+      const signature = `${row.label ?? ""}|${row.text}`;
+      if (seen.has(signature)) {
+        return false;
+      }
+      seen.add(signature);
+      return true;
+    });
+  }, [condensedWeeklyHours]);
+
+  const hasWeeklyHours = useMemo(
+    () =>
+      dedupedWeeklyHours.some(
+        (row) => row.text && row.text !== "לא הוגדר" && row.text !== "-"
+      ),
+    [dedupedWeeklyHours]
   );
 
   // === שליפת פרטי העסק לפי id (כמו שהיה) ===
@@ -438,7 +453,7 @@ export default function BusinessPage() {
       <View style={styles.hoursContainerBox}>
         <Text style={styles.hoursTitle}>🕒 שעות פעילות</Text>
         {hasWeeklyHours ? (
-          condensedWeeklyHours.map((row) => (
+          dedupedWeeklyHours.map((row) => (
             <View key={row.key} style={styles.hoursRow}>
               <Text style={styles.hoursDay}>{row.label}</Text>
               <Text style={styles.hoursValue}>{row.text}</Text>
@@ -672,7 +687,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   dateScroll: {
-    flexDirection: "row-reverse",
+    flexDirection: "row",
     justifyContent: "flex-start",
     gap: 12,
     paddingHorizontal: 4,
