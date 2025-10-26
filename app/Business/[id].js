@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -363,6 +364,31 @@ export default function BusinessPage() {
     business?.hours
   );
 
+  const handleNavigation = async (provider) => {
+    if (!business?.address) {
+      Alert.alert("לא נמצאה כתובת", "העסק לא הגדיר כתובת לניווט");
+      return;
+    }
+
+    const encodedAddress = encodeURIComponent(business.address);
+    const url =
+      provider === "waze"
+        ? `https://waze.com/ul?q=${encodedAddress}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert("שגיאה", "לא ניתן לפתוח את אפליקציית הניווט המבוקשת");
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (error) {
+      console.error("שגיאה בפתיחת ניווט", error);
+      Alert.alert("שגיאה", "אירעה תקלה בעת ניסיון פתיחת הניווט");
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       {/* 🔹 כותרת */}
@@ -390,6 +416,24 @@ export default function BusinessPage() {
         <Text style={styles.infoValue}>{business.address || "לא צוינה כתובת"}</Text>
         <Ionicons name="location-outline" size={18} color="#6C63FF" />
       </View>
+      {business.address ? (
+        <View style={styles.navigationRow}>
+          <TouchableOpacity
+            style={styles.navigationBtn}
+            onPress={() => handleNavigation("waze")}
+          >
+            <Ionicons name="navigate-outline" size={16} color="#6C63FF" />
+            <Text style={styles.navigationText}>פתח ב-Waze</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.navigationBtn}
+            onPress={() => handleNavigation("google")}
+          >
+            <Ionicons name="map-outline" size={16} color="#6C63FF" />
+            <Text style={styles.navigationText}>פתח במפות</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.infoRow}>
         <Text style={styles.infoValue}>{business.phone || "לא צויין"}</Text>
         <Ionicons name="call-outline" size={18} color="#6C63FF" />
@@ -572,6 +616,25 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "right",
   },
+  navigationRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+    marginBottom: 6,
+  },
+  navigationBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#eef0ff",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    gap: 6,
+  },
+  navigationText: {
+    color: "#454aa0",
+    fontWeight: "700",
+  },
   hoursContainerBox: {
     marginTop: 12,
     backgroundColor: "#fff",
@@ -612,7 +675,8 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   dateScroll: {
-    flexDirection: "row-reverse",
+    flexDirection: "row",
+    justifyContent: "flex-end",
     gap: 12,
     paddingHorizontal: 4,
   },
