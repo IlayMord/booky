@@ -84,6 +84,13 @@ const formatDateLabel = (date) => {
   return `${day}.${month}.${year}`;
 };
 
+const formatDateKey = (date) => {
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${year}-${month}-${day}`;
+};
+
 const getWeekdayLabels = (dayKey) => {
   const match = WEEK_DAYS.find((day) => day.key === dayKey);
   return {
@@ -125,7 +132,7 @@ export default function BusinessPage() {
     return Array.from({ length: bookingWindowLimit }, (_, index) => {
       const current = new Date(today);
       current.setDate(today.getDate() + index);
-      const iso = current.toISOString().split("T")[0];
+      const iso = formatDateKey(current);
       const dayKey = getWeekdayKeyFromDate(current);
       const window = resolveOperatingWindowForDay(business, dayKey);
       const labels = getWeekdayLabels(dayKey);
