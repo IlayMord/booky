@@ -16,6 +16,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  defaultAvatarId,
+  getAvatarSource,
+  isValidAvatarId,
+} from "../constants/profileAvatars";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -47,6 +52,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
+  const [userAvatarId, setUserAvatarId] = useState(defaultAvatarId);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -78,6 +84,7 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
+        setUserAvatarId(defaultAvatarId);
         return;
       }
 
@@ -88,14 +95,28 @@ export default function HomeClient() {
         try {
           const ref = doc(db, "users", user.uid);
           const snap = await getDoc(ref);
-          if (!snap.exists()) return;
+          if (!snap.exists()) {
+            if (isMounted) {
+              setUserAvatarId(defaultAvatarId);
+            }
+            return;
+          }
           const data = snap.data();
           const profileName = hydrateUserName(user, data);
           if (profileName && isMounted) {
             setUserName(profileName);
           }
+          if (isMounted) {
+            const avatarId = isValidAvatarId(data?.avatar)
+              ? data.avatar
+              : defaultAvatarId;
+            setUserAvatarId(avatarId);
+          }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
+          if (isMounted) {
+            setUserAvatarId(defaultAvatarId);
+          }
         }
       };
 
@@ -112,6 +133,7 @@ export default function HomeClient() {
   }, []);
 
   const heroName = userName ?? "";
+  const heroAvatarSource = getAvatarSource(userAvatarId);
 
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
   useEffect(() => {
@@ -148,29 +170,8 @@ export default function HomeClient() {
           <Text style={styles.subGreeting}>מצא את השירות המושלם עבורך</Text>
         </View>
         <TouchableOpacity onPress={() => router.push("/Profile")}>
-          <Image
-            source={{
-              uri: "https://cdn-icons-png.flaticon.com/512/149/149071.png",
-            }}
-            style={styles.avatar}
-          />
+          <Image source={heroAvatarSource} style={styles.avatar} />
         </TouchableOpacity>
-      </View>
-
-      {/* ===== Hero ===== */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>תורים זמינים בלחיצה</Text>
-          <Text style={styles.heroSubtitle}>
-            עיין בעסקים מובילים, סנן לפי תחום, וקבע תור בלחיצה אחת.
-          </Text>
-        </View>
-        <Image
-          source={{
-            uri: "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=200&q=60",
-          }}
-          style={styles.heroImage}
-        />
       </View>
 
       {/* ===== Search ===== */}
@@ -314,41 +315,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#5b6473",
     marginTop: 4,
-  },
-  heroCard: {
-    backgroundColor: "#6C63FF",
-    borderRadius: 28,
-    paddingVertical: 20,
-    paddingHorizontal: 22,
-    flexDirection: "row-reverse",
-    alignItems: "center",
-    marginBottom: 22,
-    shadowColor: "#6C63FF",
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  heroText: {
-    flex: 1,
-    alignItems: "flex-end",
-  },
-  heroTitle: {
-    color: "#fff",
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  heroSubtitle: {
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "right",
-  },
-  heroImage: {
-    width: 90,
-    height: 90,
-    borderRadius: 24,
-    marginLeft: 18,
   },
   /* SEARCH */
   searchRow: {

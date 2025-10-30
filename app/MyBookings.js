@@ -13,7 +13,6 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Modal,
     ScrollView,
     StyleSheet,
@@ -23,6 +22,7 @@ import {
 } from "react-native";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
+import InlineNotification from "../components/InlineNotification";
 
 const clampBookingWindow = (value) => {
   const parsed = Number(value);
@@ -156,6 +156,16 @@ const formatBookingDateForDisplay = (value) => {
   return date ? formatDateLabel(date) : value;
 };
 
+const isBookingTimeElapsed = (booking) => {
+  const dateKey = normaliseBookingDate(booking?.date);
+  const timeKey = normaliseBookingTime(booking?.time);
+  if (!dateKey || !timeKey) return false;
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const [hours, minutes] = timeKey.split(":").map(Number);
+  const bookingDate = new Date(year, month - 1, day, hours, minutes);
+  return bookingDate.getTime() <= Date.now();
+};
+
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -166,7 +176,12 @@ export default function MyBookings() {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleBookedTimes, setRescheduleBookedTimes] = useState(new Set());
+  const [notification, setNotification] = useState(null);
   const router = useRouter();
+
+  const showNotification = (type, message) => {
+    setNotification({ type, message, id: Date.now() });
+  };
 
   const fetchBookings = async () => {
     try {
@@ -378,10 +393,10 @@ export default function MyBookings() {
   const handleCancel = async (id) => {
     try {
       await updateDoc(doc(db, "appointments", id), { status: "cancelled" });
-      Alert.alert("❌ בוטל", "התור בוטל בהצלחה");
+      showNotification("success", "התור בוטל בהצלחה");
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לבטל את התור");
     }
   };
 
@@ -389,23 +404,29 @@ export default function MyBookings() {
     if (!selectedBooking) return;
 
     if (!rescheduleDate || !rescheduleTime) {
-      Alert.alert("שגיאה", "אנא בחר תאריך ושעה החדשים לתור");
+      showNotification("error", "אנא בחרי תאריך ושעה חדשים לתור");
       return;
     }
 
     const option = dateOptions.find((item) => item.value === rescheduleDate);
     if (!option || option.disabled) {
-      Alert.alert("שגיאה", "התאריך שנבחר אינו זמין להזמנה");
+      showNotification("error", "התאריך שנבחר אינו זמין להזמנה");
       return;
     }
 
     if (!availableHours.includes(rescheduleTime)) {
-      Alert.alert("שגיאה", "השעה שנבחרה אינה תואמת את שעות הפעילות");
+      showNotification("error", "השעה שנבחרה אינה תואמת את שעות הפעילות");
       return;
     }
 
     if (rescheduleBookedTimes.has(rescheduleTime)) {
-      Alert.alert("שעה תפוסה", "מישהו כבר קבע לשעה הזו. בחר שעה אחרת.");
+      showNotification("error", "השעה שנבחרה כבר נתפסה, בחרי שעה אחרת");
+      return;
+    }
+
+    if (isBookingTimeElapsed(selectedBooking)) {
+      showNotification("error", "לא ניתן לדחות תור שכבר התחיל או עבר");
+      closeRescheduleModal();
       return;
     }
 
@@ -415,11 +436,11 @@ export default function MyBookings() {
         time: rescheduleTime,
         status: "rescheduled",
       });
-      Alert.alert("✅ עודכן", "התור נדחה בהצלחה");
+      showNotification("success", "התור נדחה בהצלחה");
       closeRescheduleModal();
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לדחות את התור");
     }
   };
 
@@ -434,8 +455,22 @@ export default function MyBookings() {
 
   return (
     <LinearGradient colors={["#f5f7fa", "#e4ebf1"]} style={styles.container}>
+      <View style={styles.notificationWrapper} pointerEvents="box-none">
+        <InlineNotification
+          key={notification?.id || "bookingsNotification"}
+          visible={Boolean(notification?.message)}
+          type={notification?.type}
+          message={notification?.message}
+          onClose={() => setNotification(null)}
+        />
+      </View>
       {/* 🔹 כותרת */}
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          notification?.message && styles.headerShifted,
+        ]}
+      >
         <TouchableOpacity
           onPress={() => router.replace("/Profile")}
           style={styles.backBtn}
@@ -446,13 +481,19 @@ export default function MyBookings() {
         <Text style={styles.headerTitle}>התורים שלי</Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          notification?.message && styles.scrollContentShifted,
+        ]}
+      >
         {bookings.length === 0 ? (
           <Text style={styles.noBookings}>אין לך תורים כרגע.</Text>
         ) : (
           bookings.map((b) => {
             const displayDate = formatBookingDateForDisplay(b.date);
             const displayTime = normaliseBookingTime(b.time) || b.time;
+            const elapsed = isBookingTimeElapsed(b);
 
             return (
               <View key={b.id} style={styles.card}>
@@ -491,19 +532,21 @@ export default function MyBookings() {
                       <Text style={styles.cancelText}>בטל תור</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.rescheduleButton}
-                      onPress={() => {
-                        setRescheduleBusiness(null);
-                        setRescheduleBookedTimes(new Set());
-                        setRescheduleDate("");
-                        setRescheduleTime("");
-                        setSelectedBooking(b);
-                        setRescheduleVisible(true);
-                      }}
-                    >
-                      <Text style={styles.rescheduleText}>דחה תור</Text>
-                    </TouchableOpacity>
+                    {!elapsed && (
+                      <TouchableOpacity
+                        style={styles.rescheduleButton}
+                        onPress={() => {
+                          setRescheduleBusiness(null);
+                          setRescheduleBookedTimes(new Set());
+                          setRescheduleDate("");
+                          setRescheduleTime("");
+                          setSelectedBooking(b);
+                          setRescheduleVisible(true);
+                        }}
+                      >
+                        <Text style={styles.rescheduleText}>דחה תור</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
               </View>
@@ -654,6 +697,14 @@ export default function MyBookings() {
 }
 
 const styles = StyleSheet.create({
+  notificationWrapper: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 20,
+  },
   rtl: { textAlign: "right", writingDirection: "rtl" },
   container: { flex: 1 },
 
@@ -663,6 +714,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerShifted: {
+    marginTop: 130,
   },
   backBtn: {
     position: "absolute",
@@ -720,6 +774,12 @@ const styles = StyleSheet.create({
     color: "#666",
     marginTop: 100,
     fontSize: 16,
+  },
+  scrollContent: {
+    paddingBottom: 80,
+  },
+  scrollContentShifted: {
+    paddingTop: 100,
   },
   loadingContainer: {
     flex: 1,
