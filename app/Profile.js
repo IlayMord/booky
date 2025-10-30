@@ -1,19 +1,10 @@
-import * as ImagePicker from "expo-image-picker";
-import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { signOut, updateEmail, updatePassword } from "firebase/auth";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
-import {
-    getDownloadURL,
-    getStorage,
-    ref,
-    uploadBytes,
-} from "firebase/storage";
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Image,
     Modal,
     Pressable,
@@ -27,6 +18,22 @@ import {
 } from "react-native";
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { auth, db } from "../firebaseConfig";
+import InlineNotification from "../components/InlineNotification";
+
+const presetAvatars = [
+  "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
+  "https://api.dicebear.com/7.x/croodles/png?seed=Olive",
+  "https://api.dicebear.com/7.x/croodles/png?seed=River",
+  "https://api.dicebear.com/7.x/croodles/png?seed=Nova",
+  "https://api.dicebear.com/7.x/croodles/png?seed=Indigo",
+  "https://api.dicebear.com/7.x/croodles/png?seed=Paisley",
+];
+
+const defaultPreferences = {
+  pushNotifications: true,
+  smsReminders: false,
+  calendarSync: true,
+};
 
 const presetAvatars = [
   "https://images.unsplash.com/photo-1525134479668-1bee5c7c6845?auto=format&fit=crop&w=200&q=60",
@@ -51,8 +58,12 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
+  const [notification, setNotification] = useState(null);
   const router = useRouter();
-  const storage = getStorage();
+
+  const showNotification = (type, message) => {
+    setNotification({ type, message, id: Date.now() });
+  };
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -80,49 +91,15 @@ export default function Profile() {
     fetchUser();
   }, []);
 
-  const pickImageFromDevice = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      const uri = result.assets[0].uri;
-      await uploadImageToStorage(uri);
-    }
-  };
-
-  const uploadImageToStorage = async (uri) => {
-    try {
-      setUploading(true);
-      const user = auth.currentUser;
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      const imageRef = ref(storage, `profilePictures/${user.uid}.jpg`);
-      await uploadBytes(imageRef, blob);
-      const downloadURL = await getDownloadURL(imageRef);
-      setUserData((prev) => ({ ...prev, avatar: downloadURL }));
-      await updateDoc(doc(db, "users", user.uid), { avatar: downloadURL });
-      Alert.alert("✅ תמונה עודכנה בהצלחה");
-    } catch (error) {
-      Alert.alert("שגיאה בהעלאת תמונה", error.message);
-    } finally {
-      setUploading(false);
-      setAvatarModalVisible(false);
-    }
-  };
-
   const handleSelectPresetAvatar = async (uri) => {
     try {
       setUploading(true);
       const user = auth.currentUser;
       setUserData((prev) => ({ ...prev, avatar: uri }));
       await updateDoc(doc(db, "users", user.uid), { avatar: uri });
-      Alert.alert("✅ תמונה עודכנה בהצלחה");
+      showNotification("success", "תמונת הפרופיל עודכנה בהצלחה");
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "אירעה שגיאה בעת עדכון התמונה");
     } finally {
       setUploading(false);
       setAvatarModalVisible(false);
@@ -159,9 +136,19 @@ export default function Profile() {
       await updateDoc(doc(db, "users", user.uid), {
         preferences: updatedPreferences,
       });
+      const label =
+        key === "pushNotifications"
+          ? "התראות דחיפה"
+          : key === "smsReminders"
+          ? "תזכורות SMS"
+          : "סנכרון יומן";
+      showNotification(
+        "success",
+        `${label} ${updatedPreferences[key] ? "הופעלו" : "כובו"}`
+      );
     } catch (error) {
       console.error("Failed to update preferences:", error);
-      Alert.alert("שגיאה", "לא הצלחנו לעדכן את ההעדפה, נסי שוב.");
+      showNotification("error", "לא הצלחנו לעדכן את ההעדפה, נסי שוב.");
       setUserData((prev) => ({
         ...prev,
         preferences,
@@ -218,14 +205,11 @@ export default function Profile() {
   );
 
   const handleInviteFriend = () => {
-    Alert.alert("שיתוף Booky", "שלחי לחברים לינק להזמנת תורים קלה ומהירה!");
+    showNotification("info", "שיתוף בוצע! שלחי לחברים את הלינק של Booky");
   };
 
   const handleSupport = () => {
-    Alert.alert(
-      "צוות התמיכה",
-      "אנחנו זמינים לכל שאלה בכתובת support@booky.app"
-    );
+    showNotification("info", "צוות התמיכה מחכה לך בכתובת support@booky.app");
   };
 
   const handleSave = async () => {
@@ -238,25 +222,25 @@ export default function Profile() {
         await updateEmail(user, userData.email);
       }
 
-      Alert.alert("✅ עודכן בהצלחה", "הפרטים נשמרו במערכת");
+      showNotification("success", "הפרטים שלך נשמרו בהצלחה");
       setEditing(false);
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לעדכן את הפרופיל");
     }
   };
 
   const handlePasswordChange = async () => {
     if (!newPassword || newPassword.length < 6) {
-      Alert.alert("שגיאה", "הסיסמה חייבת להכיל לפחות 6 תווים");
+      showNotification("error", "הסיסמה חייבת להכיל לפחות 6 תווים");
       return;
     }
     try {
       await updatePassword(auth.currentUser, newPassword);
-      Alert.alert("✅ עודכן בהצלחה", "הסיסמה שלך שונתה");
+      showNotification("success", "הסיסמה שלך הוחלפה בהצלחה");
       setPasswordMode(false);
       setNewPassword("");
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לעדכן את הסיסמה");
     }
   };
 
@@ -275,6 +259,15 @@ export default function Profile() {
 
   return (
     <LinearGradient colors={["#6C63FF", "#48C6EF"]} style={{ flex: 1 }}>
+      <View style={styles.notificationWrapper} pointerEvents="box-none">
+        <InlineNotification
+          key={notification?.id || "profileNotification"}
+          visible={Boolean(notification?.message)}
+          type={notification?.type}
+          message={notification?.message}
+          onClose={() => setNotification(null)}
+        />
+      </View>
       <Modal
         visible={avatarModalVisible}
         animationType="slide"
@@ -287,18 +280,9 @@ export default function Profile() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>בחרו תמונת פרופיל</Text>
               <Text style={styles.modalSubtitle}>
-                העלו תמונה אישית או בחרו דמות מתוך המאגר שלנו
+                בחרי דמות מאוירת מהמאגרים הקבועים של Booky
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.modalAction}
-              onPress={pickImageFromDevice}
-              disabled={uploading}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="image" size={20} color="#6C63FF" />
-              <Text style={styles.modalActionText}>בחר מהגלריה</Text>
-            </TouchableOpacity>
             <View style={styles.avatarGrid}>
               {presetAvatars.map((uri) => (
                 <TouchableOpacity
@@ -329,7 +313,10 @@ export default function Profile() {
         </View>
       </Modal>
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          notification?.message && styles.containerShifted,
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* 🔹 Back Button */}
@@ -347,7 +334,7 @@ export default function Profile() {
                 source={{
                   uri:
                     userData.avatar ||
-                    "https://cdn-icons-png.flaticon.com/512/3135/3135715.png",
+                    "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
                 }}
                 style={styles.avatar}
               />
@@ -558,11 +545,20 @@ export default function Profile() {
 }
 
 const styles = StyleSheet.create({
+  notificationWrapper: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 20,
+  },
   rtl: {
     textAlign: "right",
     writingDirection: "rtl",
   },
-  container: { padding: 20, paddingBottom: 100 },
+  container: { padding: 20, paddingBottom: 100, paddingTop: 20 },
+  containerShifted: { paddingTop: 120 },
   backBtn: { marginTop: 50 },
   backArrow: { fontSize: 26, color: "#fff", fontWeight: "bold" },
   profileHeader: { alignItems: "center", marginVertical: 20 },
@@ -730,23 +726,6 @@ const styles = StyleSheet.create({
     color: "#6f7392",
     textAlign: "right",
     marginTop: 4,
-  },
-  modalAction: {
-    flexDirection: "row-reverse",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 16,
-    paddingVertical: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#6C63FF",
-    backgroundColor: "#f3f4ff",
-  },
-  modalActionText: {
-    color: "#6C63FF",
-    fontWeight: "700",
-    fontSize: 15,
-    marginRight: 8,
   },
   avatarGrid: {
     flexDirection: "row",

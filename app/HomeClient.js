@@ -48,6 +48,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
+  const [userAvatar, setUserAvatar] = useState(null);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -79,11 +80,13 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
+        setUserAvatar(null);
         return;
       }
 
       const fallbackName = hydrateUserName(user);
       setUserName(fallbackName || "אורח");
+      setUserAvatar(user.photoURL || null);
 
       const loadProfile = async () => {
         try {
@@ -94,6 +97,9 @@ export default function HomeClient() {
           const profileName = hydrateUserName(user, data);
           if (profileName && isMounted) {
             setUserName(profileName);
+          }
+          if (isMounted) {
+            setUserAvatar(data?.avatar || null);
           }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
@@ -175,41 +181,13 @@ export default function HomeClient() {
         <TouchableOpacity onPress={() => router.push("/Profile")}>
           <Image
             source={{
-              uri: "https://cdn-icons-png.flaticon.com/512/149/149071.png",
+              uri:
+                userAvatar || "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
             }}
             style={styles.avatar}
           />
         </TouchableOpacity>
       </View>
-
-      {/* ===== Hero ===== */}
-      <LinearGradient
-        colors={["#6C63FF", "#8B78FF"]}
-        start={{ x: 1, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={styles.heroCard}
-      >
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>
-            {heroName ? `${heroName}, הזמן שלך חשוב` : "תורים זמינים בלי לחץ"}
-          </Text>
-          <Text style={styles.heroSubtitle}>
-            ארגנו עבורך חוויה זורמת: מצא שירותים, השווה בקלות וקבל זמינות
-            מיידית.
-          </Text>
-        </View>
-        <View style={styles.heroHighlights}>
-          {quickTips.map((tip) => (
-            <View key={tip.id} style={styles.heroChip}>
-              <Ionicons name={tip.icon} size={16} color="#6C63FF" />
-              <View style={styles.heroChipTextWrap}>
-                <Text style={styles.heroChipTitle}>{tip.label}</Text>
-                <Text style={styles.heroChipDesc}>{tip.description}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      </LinearGradient>
 
       {/* ===== Search ===== */}
       <View style={styles.searchRow}>
@@ -352,70 +330,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#5b6473",
     marginTop: 4,
-  },
-  heroCard: {
-    borderRadius: 28,
-    paddingVertical: 24,
-    paddingHorizontal: 22,
-    marginBottom: 22,
-    shadowColor: "#6C63FF",
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  heroText: {
-    alignItems: "flex-end",
-  },
-  heroTitle: {
-    color: "#fff",
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 8,
-    textAlign: "right",
-  },
-  heroSubtitle: {
-    color: "rgba(255,255,255,0.85)",
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "right",
-    marginBottom: 16,
-  },
-  heroHighlights: {
-    flexDirection: "row-reverse",
-    justifyContent: "space-between",
-    flexWrap: "wrap",
-    marginTop: 8,
-  },
-  heroChip: {
-    flexDirection: "row-reverse",
-    alignItems: "flex-start",
-    backgroundColor: "#fff",
-    borderRadius: 18,
-    padding: 12,
-    width: "48%",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.4)",
-    shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
-    marginBottom: 12,
-  },
-  heroChipTextWrap: {
-    flex: 1,
-    marginRight: 10,
-  },
-  heroChipTitle: {
-    color: "#1f2937",
-    fontWeight: "700",
-    fontSize: 14,
-    textAlign: "right",
-  },
-  heroChipDesc: {
-    color: "#4b5563",
-    fontSize: 12,
-    textAlign: "right",
-    marginTop: 2,
   },
   /* SEARCH */
   searchRow: {
