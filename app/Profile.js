@@ -35,6 +35,21 @@ const defaultPreferences = {
   calendarSync: true,
 };
 
+const presetAvatars = [
+  "https://images.unsplash.com/photo-1525134479668-1bee5c7c6845?auto=format&fit=crop&w=200&q=60",
+  "https://images.unsplash.com/photo-1544723795-3fb6469f5b39?auto=format&fit=crop&w=200&q=60",
+  "https://images.unsplash.com/photo-1544723795-43253765f2dd?auto=format&fit=crop&w=200&q=60",
+  "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=200&q=60",
+  "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=60",
+  "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=60",
+];
+
+const defaultPreferences = {
+  pushNotifications: true,
+  smsReminders: false,
+  calendarSync: true,
+};
+
 export default function Profile() {
   const [userData, setUserData] = useState({ preferences: { ...defaultPreferences } });
   const [editing, setEditing] = useState(false);
