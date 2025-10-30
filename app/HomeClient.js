@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -113,6 +114,30 @@ export default function HomeClient() {
 
   const heroName = userName ?? "";
 
+  const quickTips = useMemo(
+    () => [
+      {
+        id: "smartFilters",
+        icon: "sparkles-outline",
+        label: "סינון חכם",
+        description: "מקד את החיפוש שלך לפי קטגוריות",
+      },
+      {
+        id: "instantBooking",
+        icon: "flash-outline",
+        label: "קביעת בזק",
+        description: "קבע תור בלחיצה אחת",
+      },
+      {
+        id: "reviews",
+        icon: "chatbubble-ellipses-outline",
+        label: "חוות דעת",
+        description: "ראה מה לקוחות אחרים חושבים",
+      },
+    ],
+    []
+  );
+
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
   useEffect(() => {
     let results = businesses;
@@ -158,20 +183,33 @@ export default function HomeClient() {
       </View>
 
       {/* ===== Hero ===== */}
-      <View style={styles.heroCard}>
+      <LinearGradient
+        colors={["#6C63FF", "#8B78FF"]}
+        start={{ x: 1, y: 0 }}
+        end={{ x: 0, y: 1 }}
+        style={styles.heroCard}
+      >
         <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>תורים זמינים בלחיצה</Text>
+          <Text style={styles.heroTitle}>
+            {heroName ? `${heroName}, הזמן שלך חשוב` : "תורים זמינים בלי לחץ"}
+          </Text>
           <Text style={styles.heroSubtitle}>
-            עיין בעסקים מובילים, סנן לפי תחום, וקבע תור בלחיצה אחת.
+            ארגנו עבורך חוויה זורמת: מצא שירותים, השווה בקלות וקבל זמינות
+            מיידית.
           </Text>
         </View>
-        <Image
-          source={{
-            uri: "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=200&q=60",
-          }}
-          style={styles.heroImage}
-        />
-      </View>
+        <View style={styles.heroHighlights}>
+          {quickTips.map((tip) => (
+            <View key={tip.id} style={styles.heroChip}>
+              <Ionicons name={tip.icon} size={16} color="#6C63FF" />
+              <View style={styles.heroChipTextWrap}>
+                <Text style={styles.heroChipTitle}>{tip.label}</Text>
+                <Text style={styles.heroChipDesc}>{tip.description}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </LinearGradient>
 
       {/* ===== Search ===== */}
       <View style={styles.searchRow}>
@@ -316,12 +354,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   heroCard: {
-    backgroundColor: "#6C63FF",
     borderRadius: 28,
-    paddingVertical: 20,
+    paddingVertical: 24,
     paddingHorizontal: 22,
-    flexDirection: "row-reverse",
-    alignItems: "center",
     marginBottom: 22,
     shadowColor: "#6C63FF",
     shadowOpacity: 0.25,
@@ -329,26 +364,58 @@ const styles = StyleSheet.create({
     elevation: 6,
   },
   heroText: {
-    flex: 1,
     alignItems: "flex-end",
   },
   heroTitle: {
     color: "#fff",
-    fontSize: 21,
+    fontSize: 22,
     fontWeight: "800",
-    marginBottom: 6,
+    marginBottom: 8,
+    textAlign: "right",
   },
   heroSubtitle: {
-    color: "rgba(255,255,255,0.88)",
+    color: "rgba(255,255,255,0.85)",
     fontSize: 13,
     lineHeight: 20,
     textAlign: "right",
+    marginBottom: 16,
   },
-  heroImage: {
-    width: 90,
-    height: 90,
-    borderRadius: 24,
-    marginLeft: 18,
+  heroHighlights: {
+    flexDirection: "row-reverse",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    marginTop: 8,
+  },
+  heroChip: {
+    flexDirection: "row-reverse",
+    alignItems: "flex-start",
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    padding: 12,
+    width: "48%",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.4)",
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+    marginBottom: 12,
+  },
+  heroChipTextWrap: {
+    flex: 1,
+    marginRight: 10,
+  },
+  heroChipTitle: {
+    color: "#1f2937",
+    fontWeight: "700",
+    fontSize: 14,
+    textAlign: "right",
+  },
+  heroChipDesc: {
+    color: "#4b5563",
+    fontSize: 12,
+    textAlign: "right",
+    marginTop: 2,
   },
   /* SEARCH */
   searchRow: {
