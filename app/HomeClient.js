@@ -47,6 +47,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
+  const [userAvatar, setUserAvatar] = useState(null);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -78,11 +79,13 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
+        setUserAvatar(null);
         return;
       }
 
       const fallbackName = hydrateUserName(user);
       setUserName(fallbackName || "אורח");
+      setUserAvatar(user.photoURL || null);
 
       const loadProfile = async () => {
         try {
@@ -93,6 +96,9 @@ export default function HomeClient() {
           const profileName = hydrateUserName(user, data);
           if (profileName && isMounted) {
             setUserName(profileName);
+          }
+          if (isMounted) {
+            setUserAvatar(data?.avatar || null);
           }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
@@ -150,27 +156,12 @@ export default function HomeClient() {
         <TouchableOpacity onPress={() => router.push("/Profile")}>
           <Image
             source={{
-              uri: "https://cdn-icons-png.flaticon.com/512/149/149071.png",
+              uri:
+                userAvatar || "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
             }}
             style={styles.avatar}
           />
         </TouchableOpacity>
-      </View>
-
-      {/* ===== Hero ===== */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>תורים זמינים בלחיצה</Text>
-          <Text style={styles.heroSubtitle}>
-            עיין בעסקים מובילים, סנן לפי תחום, וקבע תור בלחיצה אחת.
-          </Text>
-        </View>
-        <Image
-          source={{
-            uri: "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=200&q=60",
-          }}
-          style={styles.heroImage}
-        />
       </View>
 
       {/* ===== Search ===== */}
@@ -314,41 +305,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#5b6473",
     marginTop: 4,
-  },
-  heroCard: {
-    backgroundColor: "#6C63FF",
-    borderRadius: 28,
-    paddingVertical: 20,
-    paddingHorizontal: 22,
-    flexDirection: "row-reverse",
-    alignItems: "center",
-    marginBottom: 22,
-    shadowColor: "#6C63FF",
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  heroText: {
-    flex: 1,
-    alignItems: "flex-end",
-  },
-  heroTitle: {
-    color: "#fff",
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  heroSubtitle: {
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "right",
-  },
-  heroImage: {
-    width: 90,
-    height: 90,
-    borderRadius: 24,
-    marginLeft: 18,
   },
   /* SEARCH */
   searchRow: {
