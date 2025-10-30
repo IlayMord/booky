@@ -1,7 +1,7 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { signOut, updateEmail, updatePassword } from "firebase/auth";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
@@ -19,30 +19,12 @@ import {
 import Animated, { FadeInUp } from "react-native-reanimated";
 import { auth, db } from "../firebaseConfig";
 import InlineNotification from "../components/InlineNotification";
-
-const presetAvatars = [
-  "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
-  "https://api.dicebear.com/7.x/croodles/png?seed=Olive",
-  "https://api.dicebear.com/7.x/croodles/png?seed=River",
-  "https://api.dicebear.com/7.x/croodles/png?seed=Nova",
-  "https://api.dicebear.com/7.x/croodles/png?seed=Indigo",
-  "https://api.dicebear.com/7.x/croodles/png?seed=Paisley",
-];
-
-const defaultPreferences = {
-  pushNotifications: true,
-  smsReminders: false,
-  calendarSync: true,
-};
-
-const presetAvatars = [
-  "https://images.unsplash.com/photo-1525134479668-1bee5c7c6845?auto=format&fit=crop&w=200&q=60",
-  "https://images.unsplash.com/photo-1544723795-3fb6469f5b39?auto=format&fit=crop&w=200&q=60",
-  "https://images.unsplash.com/photo-1544723795-43253765f2dd?auto=format&fit=crop&w=200&q=60",
-  "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=200&q=60",
-  "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=200&q=60",
-  "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=60",
-];
+import {
+  defaultAvatarId,
+  getAvatarSource,
+  isValidAvatarId,
+  presetAvatars,
+} from "../constants/profileAvatars";
 
 const defaultPreferences = {
   pushNotifications: true,
@@ -51,7 +33,10 @@ const defaultPreferences = {
 };
 
 export default function Profile() {
-  const [userData, setUserData] = useState({ preferences: { ...defaultPreferences } });
+  const [userData, setUserData] = useState({
+    preferences: { ...defaultPreferences },
+    avatar: defaultAvatarId,
+  });
   const [editing, setEditing] = useState(false);
   const [passwordMode, setPasswordMode] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -78,9 +63,20 @@ export default function Profile() {
               ...defaultPreferences,
               ...(data.preferences || {}),
             };
-            setUserData({ ...data, preferences: mergedPreferences });
+            const avatarId = isValidAvatarId(data.avatar)
+              ? data.avatar
+              : defaultAvatarId;
+            setUserData({
+              ...data,
+              avatar: avatarId,
+              preferences: mergedPreferences,
+            });
           } else {
-            setUserData({ email: user.email, preferences: { ...defaultPreferences } });
+            setUserData({
+              email: user.email,
+              preferences: { ...defaultPreferences },
+              avatar: defaultAvatarId,
+            });
           }
         }
       } catch (error) {
@@ -91,13 +87,18 @@ export default function Profile() {
     fetchUser();
   }, []);
 
-  const handleSelectPresetAvatar = async (uri) => {
+  const handleSelectPresetAvatar = async (avatarId) => {
     try {
       setUploading(true);
       const user = auth.currentUser;
-      setUserData((prev) => ({ ...prev, avatar: uri }));
-      await updateDoc(doc(db, "users", user.uid), { avatar: uri });
-      showNotification("success", "תמונת הפרופיל עודכנה בהצלחה");
+      const ref = doc(db, "users", user.uid);
+      setUserData((prev) => ({ ...prev, avatar: avatarId }));
+      await setDoc(ref, { avatar: avatarId }, { merge: true });
+      const selectedAvatar = presetAvatars.find((item) => item.id === avatarId);
+      showNotification(
+        "success",
+        selectedAvatar?.label || "תמונת הפרופיל עודכנה בהצלחה"
+      );
     } catch (error) {
       showNotification("error", error.message || "אירעה שגיאה בעת עדכון התמונה");
     } finally {
@@ -121,6 +122,10 @@ export default function Profile() {
     [userData]
   );
 
+  const resolvedAvatarId = isValidAvatarId(userData.avatar)
+    ? userData.avatar
+    : defaultAvatarId;
+
   const togglePreference = async (key) => {
     const updatedPreferences = {
       ...preferences,
@@ -133,9 +138,13 @@ export default function Profile() {
 
     try {
       const user = auth.currentUser;
-      await updateDoc(doc(db, "users", user.uid), {
-        preferences: updatedPreferences,
-      });
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          preferences: updatedPreferences,
+        },
+        { merge: true }
+      );
       const label =
         key === "pushNotifications"
           ? "התראות דחיפה"
@@ -216,7 +225,7 @@ export default function Profile() {
     try {
       const user = auth.currentUser;
       const ref = doc(db, "users", user.uid);
-      await updateDoc(ref, userData);
+      await setDoc(ref, userData, { merge: true });
 
       if (userData.email && userData.email !== user.email) {
         await updateEmail(user, userData.email);
@@ -284,17 +293,23 @@ export default function Profile() {
               </Text>
             </View>
             <View style={styles.avatarGrid}>
-              {presetAvatars.map((uri) => (
-                <TouchableOpacity
-                  key={uri}
-                  style={styles.avatarOption}
-                  onPress={() => handleSelectPresetAvatar(uri)}
-                  disabled={uploading}
-                  activeOpacity={0.85}
-                >
-                  <Image source={{ uri }} style={styles.avatarOptionImage} />
-                </TouchableOpacity>
-              ))}
+              {presetAvatars.map((avatar) => {
+                const isSelected = resolvedAvatarId === avatar.id;
+                return (
+                  <TouchableOpacity
+                    key={avatar.id}
+                    style={[
+                      styles.avatarOption,
+                      isSelected && styles.avatarOptionSelected,
+                    ]}
+                    onPress={() => handleSelectPresetAvatar(avatar.id)}
+                    disabled={uploading}
+                    activeOpacity={0.85}
+                  >
+                    <Image source={avatar.source} style={styles.avatarOptionImage} />
+                  </TouchableOpacity>
+                );
+              })}
             </View>
             {uploading && (
               <View style={styles.modalLoading}>
@@ -331,11 +346,7 @@ export default function Profile() {
               <ActivityIndicator color="#fff" size="large" />
             ) : (
               <Image
-                source={{
-                  uri:
-                    userData.avatar ||
-                    "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
-                }}
+                source={getAvatarSource(resolvedAvatarId)}
                 style={styles.avatar}
               />
             )}
@@ -741,6 +752,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#e6e9ff",
     marginBottom: 12,
+  },
+  avatarOptionSelected: {
+    borderColor: "#6C63FF",
+    borderWidth: 3,
   },
   avatarOptionImage: {
     width: "100%",

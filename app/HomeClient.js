@@ -17,6 +17,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  defaultAvatarId,
+  getAvatarSource,
+  isValidAvatarId,
+} from "../constants/profileAvatars";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -48,7 +53,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
-  const [userAvatar, setUserAvatar] = useState(null);
+  const [userAvatarId, setUserAvatarId] = useState(defaultAvatarId);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -80,7 +85,7 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
-        setUserAvatar(null);
+        setUserAvatarId(defaultAvatarId);
         return;
       }
 
@@ -92,17 +97,28 @@ export default function HomeClient() {
         try {
           const ref = doc(db, "users", user.uid);
           const snap = await getDoc(ref);
-          if (!snap.exists()) return;
+          if (!snap.exists()) {
+            if (isMounted) {
+              setUserAvatarId(defaultAvatarId);
+            }
+            return;
+          }
           const data = snap.data();
           const profileName = hydrateUserName(user, data);
           if (profileName && isMounted) {
             setUserName(profileName);
           }
           if (isMounted) {
-            setUserAvatar(data?.avatar || null);
+            const avatarId = isValidAvatarId(data?.avatar)
+              ? data.avatar
+              : defaultAvatarId;
+            setUserAvatarId(avatarId);
           }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
+          if (isMounted) {
+            setUserAvatarId(defaultAvatarId);
+          }
         }
       };
 
@@ -119,6 +135,7 @@ export default function HomeClient() {
   }, []);
 
   const heroName = userName ?? "";
+  const heroAvatarSource = getAvatarSource(userAvatarId);
 
   const quickTips = useMemo(
     () => [
@@ -179,13 +196,7 @@ export default function HomeClient() {
           <Text style={styles.subGreeting}>מצא את השירות המושלם עבורך</Text>
         </View>
         <TouchableOpacity onPress={() => router.push("/Profile")}>
-          <Image
-            source={{
-              uri:
-                userAvatar || "https://api.dicebear.com/7.x/croodles/png?seed=Sunny",
-            }}
-            style={styles.avatar}
-          />
+          <Image source={heroAvatarSource} style={styles.avatar} />
         </TouchableOpacity>
       </View>
 
