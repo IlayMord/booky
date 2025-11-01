@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -90,6 +91,7 @@ export default function HomeClient() {
 
       const fallbackName = hydrateUserName(user);
       setUserName(fallbackName || "אורח");
+      setUserAvatar(user.photoURL || null);
 
       const loadProfile = async () => {
         try {
