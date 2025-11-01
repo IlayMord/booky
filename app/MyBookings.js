@@ -13,7 +13,6 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Modal,
     ScrollView,
     StyleSheet,
@@ -23,6 +22,16 @@ import {
 } from "react-native";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
+import InlineNotification from "../components/InlineNotification";
+import {
+  formatBookingDateForDisplay,
+  formatDateKey,
+  formatDateLabel,
+  isBookingTimeElapsed,
+  normaliseBookingDate,
+  normaliseBookingTime,
+} from "../utils/bookingDate";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const clampBookingWindow = (value) => {
   const parsed = Number(value);
@@ -91,71 +100,6 @@ const resolveOperatingWindowForDay = (business, dayKey) => {
   return { opening, closing };
 };
 
-const formatDateKey = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${year}-${month}-${day}`;
-};
-
-const formatDateLabel = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${day}.${month}.${year}`;
-};
-
-const parseDateKey = (value) => {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
-};
-
-const normaliseBookingDate = (value) => {
-  if (!value) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return value;
-  }
-
-  const cleaned = String(value).replace(/[\.]/g, "/");
-  const parts = cleaned.split("/");
-  if (parts.length === 3) {
-    const [day, month, yearPart] = parts.map((part) => part.trim());
-    if (day && month && yearPart) {
-      const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
-      return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    }
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return formatDateKey(parsed);
-  }
-
-  return "";
-};
-
-const normaliseBookingTime = (value) => {
-  if (!value) return "";
-  const match = String(value).match(/(\d{2}:\d{2})/);
-  return match ? match[1] : "";
-};
-
-const formatBookingDateForDisplay = (value) => {
-  const normalised = normaliseBookingDate(value);
-  if (!normalised) return value;
-  const date = parseDateKey(normalised);
-  return date ? formatDateLabel(date) : value;
-};
-
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -166,19 +110,51 @@ export default function MyBookings() {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleBookedTimes, setRescheduleBookedTimes] = useState(new Set());
+  const [notification, setNotification] = useState(null);
   const router = useRouter();
+
+  const showNotification = (type, message) => {
+    setNotification({ type, message, id: Date.now() });
+  };
 
   const fetchBookings = async () => {
     try {
       const user = auth.currentUser;
-      if (!user) return;
-      const q = query(
+      if (!user) {
+        setBookings([]);
+        await syncAppointmentNotifications([], { enabled: false });
+        return;
+      }
+
+      const appointmentsQuery = query(
         collection(db, "appointments"),
         where("userId", "==", user.uid)
       );
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(appointmentsQuery);
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       setBookings(data);
+
+      let pushEnabled = true;
+      try {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if (userDoc.exists()) {
+          const preferences = userDoc.data()?.preferences || {};
+          if (typeof preferences.pushNotifications === "boolean") {
+            pushEnabled = preferences.pushNotifications;
+          }
+        }
+      } catch (preferencesError) {
+        console.error("Error fetching user preferences:", preferencesError);
+      }
+
+      try {
+        await syncAppointmentNotifications(data, { enabled: pushEnabled });
+      } catch (notificationError) {
+        console.error(
+          "Error syncing appointment notifications:",
+          notificationError
+        );
+      }
     } catch (error) {
       console.error("Error fetching bookings:", error);
     } finally {
@@ -378,10 +354,10 @@ export default function MyBookings() {
   const handleCancel = async (id) => {
     try {
       await updateDoc(doc(db, "appointments", id), { status: "cancelled" });
-      Alert.alert("❌ בוטל", "התור בוטל בהצלחה");
+      showNotification("success", "התור בוטל בהצלחה");
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לבטל את התור");
     }
   };
 
@@ -389,23 +365,29 @@ export default function MyBookings() {
     if (!selectedBooking) return;
 
     if (!rescheduleDate || !rescheduleTime) {
-      Alert.alert("שגיאה", "אנא בחר תאריך ושעה החדשים לתור");
+      showNotification("error", "אנא בחרי תאריך ושעה חדשים לתור");
       return;
     }
 
     const option = dateOptions.find((item) => item.value === rescheduleDate);
     if (!option || option.disabled) {
-      Alert.alert("שגיאה", "התאריך שנבחר אינו זמין להזמנה");
+      showNotification("error", "התאריך שנבחר אינו זמין להזמנה");
       return;
     }
 
     if (!availableHours.includes(rescheduleTime)) {
-      Alert.alert("שגיאה", "השעה שנבחרה אינה תואמת את שעות הפעילות");
+      showNotification("error", "השעה שנבחרה אינה תואמת את שעות הפעילות");
       return;
     }
 
     if (rescheduleBookedTimes.has(rescheduleTime)) {
-      Alert.alert("שעה תפוסה", "מישהו כבר קבע לשעה הזו. בחר שעה אחרת.");
+      showNotification("error", "השעה שנבחרה כבר נתפסה, בחרי שעה אחרת");
+      return;
+    }
+
+    if (isBookingTimeElapsed(selectedBooking)) {
+      showNotification("error", "לא ניתן לדחות תור שכבר התחיל או עבר");
+      closeRescheduleModal();
       return;
     }
 
@@ -415,11 +397,11 @@ export default function MyBookings() {
         time: rescheduleTime,
         status: "rescheduled",
       });
-      Alert.alert("✅ עודכן", "התור נדחה בהצלחה");
+      showNotification("success", "התור נדחה בהצלחה");
       closeRescheduleModal();
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לדחות את התור");
     }
   };
 
@@ -434,8 +416,22 @@ export default function MyBookings() {
 
   return (
     <LinearGradient colors={["#f5f7fa", "#e4ebf1"]} style={styles.container}>
+      <View style={styles.notificationWrapper} pointerEvents="box-none">
+        <InlineNotification
+          key={notification?.id || "bookingsNotification"}
+          visible={Boolean(notification?.message)}
+          type={notification?.type}
+          message={notification?.message}
+          onClose={() => setNotification(null)}
+        />
+      </View>
       {/* 🔹 כותרת */}
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          notification?.message && styles.headerShifted,
+        ]}
+      >
         <TouchableOpacity
           onPress={() => router.replace("/Profile")}
           style={styles.backBtn}
@@ -446,13 +442,19 @@ export default function MyBookings() {
         <Text style={styles.headerTitle}>התורים שלי</Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          notification?.message && styles.scrollContentShifted,
+        ]}
+      >
         {bookings.length === 0 ? (
           <Text style={styles.noBookings}>אין לך תורים כרגע.</Text>
         ) : (
           bookings.map((b) => {
             const displayDate = formatBookingDateForDisplay(b.date);
             const displayTime = normaliseBookingTime(b.time) || b.time;
+            const elapsed = isBookingTimeElapsed(b);
 
             return (
               <View key={b.id} style={styles.card}>
@@ -491,19 +493,21 @@ export default function MyBookings() {
                       <Text style={styles.cancelText}>בטל תור</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.rescheduleButton}
-                      onPress={() => {
-                        setRescheduleBusiness(null);
-                        setRescheduleBookedTimes(new Set());
-                        setRescheduleDate("");
-                        setRescheduleTime("");
-                        setSelectedBooking(b);
-                        setRescheduleVisible(true);
-                      }}
-                    >
-                      <Text style={styles.rescheduleText}>דחה תור</Text>
-                    </TouchableOpacity>
+                    {!elapsed && (
+                      <TouchableOpacity
+                        style={styles.rescheduleButton}
+                        onPress={() => {
+                          setRescheduleBusiness(null);
+                          setRescheduleBookedTimes(new Set());
+                          setRescheduleDate("");
+                          setRescheduleTime("");
+                          setSelectedBooking(b);
+                          setRescheduleVisible(true);
+                        }}
+                      >
+                        <Text style={styles.rescheduleText}>דחה תור</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
               </View>
@@ -654,6 +658,14 @@ export default function MyBookings() {
 }
 
 const styles = StyleSheet.create({
+  notificationWrapper: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 20,
+  },
   rtl: { textAlign: "right", writingDirection: "rtl" },
   container: { flex: 1 },
 
@@ -663,6 +675,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerShifted: {
+    marginTop: 130,
   },
   backBtn: {
     position: "absolute",
@@ -720,6 +735,12 @@ const styles = StyleSheet.create({
     color: "#666",
     marginTop: 100,
     fontSize: 16,
+  },
+  scrollContent: {
+    paddingBottom: 80,
+  },
+  scrollContentShifted: {
+    paddingTop: 100,
   },
   loadingContainer: {
     flex: 1,

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -16,6 +16,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import {
+  defaultAvatarId,
+  getAvatarSource,
+  isValidAvatarId,
+} from "../constants/profileAvatars";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -47,6 +53,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
+  const [userAvatarId, setUserAvatar] = useState(defaultAvatarId);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -78,6 +85,7 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
+        setUserAvatar(defaultAvatarId);
         return;
       }
 
@@ -88,14 +96,55 @@ export default function HomeClient() {
         try {
           const ref = doc(db, "users", user.uid);
           const snap = await getDoc(ref);
-          if (!snap.exists()) return;
-          const data = snap.data();
-          const profileName = hydrateUserName(user, data);
-          if (profileName && isMounted) {
-            setUserName(profileName);
+          let pushEnabled = true;
+          if (!snap.exists()) {
+            if (isMounted) {
+              setUserAvatar(defaultAvatarId);
+            }
+          } else {
+            const data = snap.data();
+            const profileName = hydrateUserName(user, data);
+            if (profileName && isMounted) {
+              setUserName(profileName);
+            }
+            if (isMounted) {
+              const avatarId = isValidAvatarId(data?.avatar)
+                ? data.avatar
+                : defaultAvatarId;
+              setUserAvatar(avatarId);
+            }
+            if (typeof data?.preferences?.pushNotifications === "boolean") {
+              pushEnabled = data.preferences.pushNotifications;
+            }
+          }
+
+          try {
+            if (pushEnabled) {
+              const appointmentsSnapshot = await getDocs(
+                query(
+                  collection(db, "appointments"),
+                  where("userId", "==", user.uid)
+                )
+              );
+              const appointments = appointmentsSnapshot.docs.map((docSnap) => ({
+                id: docSnap.id,
+                ...docSnap.data(),
+              }));
+              await syncAppointmentNotifications(appointments, { enabled: true });
+            } else {
+              await syncAppointmentNotifications([], { enabled: false });
+            }
+          } catch (notificationsError) {
+            console.error(
+              "❌ שגיאה בסנכרון התראות לתורים:",
+              notificationsError
+            );
           }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
+          if (isMounted) {
+            setUserAvatar(defaultAvatarId);
+          }
         }
       };
 
@@ -112,6 +161,7 @@ export default function HomeClient() {
   }, []);
 
   const heroName = userName ?? "";
+  const heroAvatarSource = getAvatarSource(userAvatarId);
 
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
   useEffect(() => {
@@ -148,29 +198,8 @@ export default function HomeClient() {
           <Text style={styles.subGreeting}>מצא את השירות המושלם עבורך</Text>
         </View>
         <TouchableOpacity onPress={() => router.push("/Profile")}>
-          <Image
-            source={{
-              uri: "https://cdn-icons-png.flaticon.com/512/149/149071.png",
-            }}
-            style={styles.avatar}
-          />
+          <Image source={heroAvatarSource} style={styles.avatar} />
         </TouchableOpacity>
-      </View>
-
-      {/* ===== Hero ===== */}
-      <View style={styles.heroCard}>
-        <View style={styles.heroText}>
-          <Text style={styles.heroTitle}>תורים זמינים בלחיצה</Text>
-          <Text style={styles.heroSubtitle}>
-            עיין בעסקים מובילים, סנן לפי תחום, וקבע תור בלחיצה אחת.
-          </Text>
-        </View>
-        <Image
-          source={{
-            uri: "https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=200&q=60",
-          }}
-          style={styles.heroImage}
-        />
       </View>
 
       {/* ===== Search ===== */}
@@ -314,41 +343,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#5b6473",
     marginTop: 4,
-  },
-  heroCard: {
-    backgroundColor: "#6C63FF",
-    borderRadius: 28,
-    paddingVertical: 20,
-    paddingHorizontal: 22,
-    flexDirection: "row-reverse",
-    alignItems: "center",
-    marginBottom: 22,
-    shadowColor: "#6C63FF",
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  heroText: {
-    flex: 1,
-    alignItems: "flex-end",
-  },
-  heroTitle: {
-    color: "#fff",
-    fontSize: 21,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  heroSubtitle: {
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 13,
-    lineHeight: 20,
-    textAlign: "right",
-  },
-  heroImage: {
-    width: 90,
-    height: 90,
-    borderRadius: 24,
-    marginLeft: 18,
   },
   /* SEARCH */
   searchRow: {
