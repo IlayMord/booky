@@ -19,11 +19,13 @@ try {
 }
 
 const Notifications = NotificationsModule;
+const hasNativeNotificationsSupport =
+  !!Notifications && Notifications.__isFallback !== true;
 
 const STORAGE_KEY = "@booky_appointment_notifications";
 const ANDROID_CHANNEL_ID = "booky-reminders";
 
-if (Notifications?.setNotificationHandler) {
+if (hasNativeNotificationsSupport && Notifications?.setNotificationHandler) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
@@ -34,7 +36,7 @@ if (Notifications?.setNotificationHandler) {
 }
 
 const ensureAndroidChannelAsync = async () => {
-  if (!Notifications?.getNotificationChannelAsync) {
+  if (!hasNativeNotificationsSupport || !Notifications?.getNotificationChannelAsync) {
     return;
   }
 
@@ -57,7 +59,11 @@ const ensureAndroidChannelAsync = async () => {
 };
 
 const ensurePushPermissionsAsync = async () => {
-  if (!Notifications?.getPermissionsAsync || !Notifications?.requestPermissionsAsync) {
+  if (
+    !hasNativeNotificationsSupport ||
+    !Notifications?.getPermissionsAsync ||
+    !Notifications?.requestPermissionsAsync
+  ) {
     return false;
   }
 
@@ -100,7 +106,7 @@ const persistStoredNotificationsAsync = async (mapping) => {
 };
 
 const cancelNotificationIdsAsync = async (ids = []) => {
-  if (!Notifications?.cancelScheduledNotificationAsync) {
+  if (!hasNativeNotificationsSupport || !Notifications?.cancelScheduledNotificationAsync) {
     return;
   }
 
@@ -109,7 +115,7 @@ const cancelNotificationIdsAsync = async (ids = []) => {
 };
 
 const scheduleReminderAsync = async (booking, triggerDate, reminderType) => {
-  if (!Notifications?.scheduleNotificationAsync) {
+  if (!hasNativeNotificationsSupport || !Notifications?.scheduleNotificationAsync) {
     return null;
   }
 
@@ -154,7 +160,7 @@ export const syncAppointmentNotifications = async (
 ) => {
   const stored = await readStoredNotificationsAsync();
 
-  if (!Notifications) {
+  if (!hasNativeNotificationsSupport) {
     if (Object.values(stored).flat().length) {
       await persistStoredNotificationsAsync({});
     }
