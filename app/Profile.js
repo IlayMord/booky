@@ -189,7 +189,6 @@ export default function Profile() {
 
   const handleSelectPresetAvatar = async (avatarId) => {
     try {
-      setUploading(true);
       const user = auth.currentUser;
       const ref = doc(db, "users", user.uid);
       setUserData((prev) => ({ ...prev, avatar: avatarId }));
