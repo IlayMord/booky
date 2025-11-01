@@ -20,10 +20,11 @@ import Animated, { FadeInUp } from "react-native-reanimated";
 import { auth, db } from "../firebaseConfig";
 import InlineNotification from "../components/InlineNotification";
 import {
+  avatarCatalog,
   defaultAvatarId,
+  getAvatarById,
   getAvatarSource,
   isValidAvatarId,
-  presetAvatars,
 } from "../constants/profileAvatars";
 
 const defaultPreferences = {
@@ -94,7 +95,7 @@ export default function Profile() {
       const ref = doc(db, "users", user.uid);
       setUserData((prev) => ({ ...prev, avatar: avatarId }));
       await setDoc(ref, { avatar: avatarId }, { merge: true });
-      const selectedAvatar = presetAvatars.find((item) => item.id === avatarId);
+      const selectedAvatar = getAvatarById(avatarId);
       showNotification(
         "success",
         selectedAvatar?.label || "תמונת הפרופיל עודכנה בהצלחה"
@@ -293,7 +294,7 @@ export default function Profile() {
               </Text>
             </View>
             <View style={styles.avatarGrid}>
-              {presetAvatars.map((avatar) => {
+              {avatarCatalog.map((avatar) => {
                 const isSelected = resolvedAvatarId === avatar.id;
                 return (
                   <TouchableOpacity

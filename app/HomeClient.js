@@ -137,30 +137,6 @@ export default function HomeClient() {
   const heroName = userName ?? "";
   const heroAvatarSource = getAvatarSource(userAvatarId);
 
-  const quickTips = useMemo(
-    () => [
-      {
-        id: "smartFilters",
-        icon: "sparkles-outline",
-        label: "סינון חכם",
-        description: "מקד את החיפוש שלך לפי קטגוריות",
-      },
-      {
-        id: "instantBooking",
-        icon: "flash-outline",
-        label: "קביעת בזק",
-        description: "קבע תור בלחיצה אחת",
-      },
-      {
-        id: "reviews",
-        icon: "chatbubble-ellipses-outline",
-        label: "חוות דעת",
-        description: "ראה מה לקוחות אחרים חושבים",
-      },
-    ],
-    []
-  );
-
   // ✅ סינון עסקים לפי קטגוריה וחיפוש
   useEffect(() => {
     let results = businesses;

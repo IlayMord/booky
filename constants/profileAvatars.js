@@ -1,13 +1,13 @@
 import { profileAvatarSources } from "../assets/images/profilelogo";
 
-export const presetAvatars = profileAvatarSources.map((item) => ({
+export const avatarCatalog = profileAvatarSources.map((item) => ({
   ...item,
   source: { uri: item.uri },
 }));
 
-export const defaultAvatarId = presetAvatars[0]?.id ?? "avatar1";
+export const defaultAvatarId = avatarCatalog[0]?.id ?? "avatar1";
 
-const avatarSourceMap = presetAvatars.reduce((acc, avatar) => {
+const avatarSourceMap = avatarCatalog.reduce((acc, avatar) => {
   acc[avatar.id] = avatar.source;
   return acc;
 }, {});
@@ -20,3 +20,7 @@ export const getAvatarSource = (avatarId) => {
   }
   return avatarSourceMap[defaultAvatarId];
 };
+
+export const getAvatarById = (avatarId) =>
+  avatarCatalog.find((item) => item.id === avatarId) || avatarCatalog[0];
+
