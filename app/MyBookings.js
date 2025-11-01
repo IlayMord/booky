@@ -2,18 +2,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import {
-    collection,
-    doc,
-    getDoc,
-    getDocs,
-    query,
-    updateDoc,
-    where,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  increment,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Modal,
     ScrollView,
     StyleSheet,
@@ -21,8 +23,25 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import InlineNotification from "../components/InlineNotification";
+import {
+  CANCELLATION_FEE_AMOUNT,
+  CANCELLATION_FEE_WINDOW_HOURS,
+  getCancellationFeeReasonLabel,
+} from "../constants/fees";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
+import { formatILS } from "../utils/currency";
+import {
+  formatBookingDateForDisplay,
+  formatDateKey,
+  formatDateLabel,
+  getHoursUntilBooking,
+  isBookingTimeElapsed,
+  normaliseBookingDate,
+  normaliseBookingTime,
+} from "../utils/bookingDate";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const clampBookingWindow = (value) => {
   const parsed = Number(value);
@@ -91,71 +110,6 @@ const resolveOperatingWindowForDay = (business, dayKey) => {
   return { opening, closing };
 };
 
-const formatDateKey = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${year}-${month}-${day}`;
-};
-
-const formatDateLabel = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${day}.${month}.${year}`;
-};
-
-const parseDateKey = (value) => {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
-};
-
-const normaliseBookingDate = (value) => {
-  if (!value) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return value;
-  }
-
-  const cleaned = String(value).replace(/[\.]/g, "/");
-  const parts = cleaned.split("/");
-  if (parts.length === 3) {
-    const [day, month, yearPart] = parts.map((part) => part.trim());
-    if (day && month && yearPart) {
-      const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
-      return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    }
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return formatDateKey(parsed);
-  }
-
-  return "";
-};
-
-const normaliseBookingTime = (value) => {
-  if (!value) return "";
-  const match = String(value).match(/(\d{2}:\d{2})/);
-  return match ? match[1] : "";
-};
-
-const formatBookingDateForDisplay = (value) => {
-  const normalised = normaliseBookingDate(value);
-  if (!normalised) return value;
-  const date = parseDateKey(normalised);
-  return date ? formatDateLabel(date) : value;
-};
-
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -166,19 +120,70 @@ export default function MyBookings() {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleBookedTimes, setRescheduleBookedTimes] = useState(new Set());
+  const [notification, setNotification] = useState(null);
+  const [cancellationCredit, setCancellationCredit] = useState(0);
   const router = useRouter();
+
+  const showNotification = (type, message) => {
+    setNotification({ type, message, id: Date.now() });
+  };
+
+  const shouldApplyLateCancellationFee = (booking) => {
+    const hoursUntil = getHoursUntilBooking(booking);
+    if (hoursUntil === null) {
+      return false;
+    }
+    return hoursUntil <= CANCELLATION_FEE_WINDOW_HOURS;
+  };
 
   const fetchBookings = async () => {
     try {
       const user = auth.currentUser;
-      if (!user) return;
-      const q = query(
+      if (!user) {
+        setBookings([]);
+        setCancellationCredit(0);
+        await syncAppointmentNotifications([], { enabled: false });
+        return;
+      }
+
+      const appointmentsQuery = query(
         collection(db, "appointments"),
         where("userId", "==", user.uid)
       );
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(appointmentsQuery);
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       setBookings(data);
+
+      let pushEnabled = true;
+      try {
+        const userRef = doc(db, "users", user.uid);
+        const userDoc = await getDoc(userRef);
+        if (userDoc.exists()) {
+          const data = userDoc.data() || {};
+          const preferences = data.preferences || {};
+          if (typeof preferences.pushNotifications === "boolean") {
+            pushEnabled = preferences.pushNotifications;
+          }
+          const creditValue = Number(data.cancellationCredit);
+          setCancellationCredit(
+            Number.isFinite(creditValue) ? creditValue : 0
+          );
+        } else {
+          setCancellationCredit(0);
+        }
+      } catch (preferencesError) {
+        console.error("Error fetching user preferences:", preferencesError);
+        setCancellationCredit(0);
+      }
+
+      try {
+        await syncAppointmentNotifications(data, { enabled: pushEnabled });
+      } catch (notificationError) {
+        console.error(
+          "Error syncing appointment notifications:",
+          notificationError
+        );
+      }
     } catch (error) {
       console.error("Error fetching bookings:", error);
     } finally {
@@ -375,13 +380,84 @@ export default function MyBookings() {
     setRescheduleBookedTimes(new Set());
   };
 
-  const handleCancel = async (id) => {
+  const handleCancel = async (booking) => {
+    if (!booking?.id) {
+      return;
+    }
+
+    const user = auth.currentUser;
+    const appointmentRef = doc(db, "appointments", booking.id);
+    const applyFee = shouldApplyLateCancellationFee(booking);
+    const hasExistingPenalty = Boolean(booking?.penalty?.applied);
+    const penaltyAlreadyApplied =
+      hasExistingPenalty && booking?.penalty?.reason === "late_cancellation";
+
+    const baseTimestamp = serverTimestamp();
+    const updates = {
+      status: "cancelled",
+      cancelledAt: baseTimestamp,
+      cancelledBy: user?.uid || null,
+    };
+
+    let creditDelta = 0;
+
+    if (applyFee && !hasExistingPenalty) {
+      updates.penalty = {
+        applied: true,
+        amount: CANCELLATION_FEE_AMOUNT,
+        reason: "late_cancellation",
+        appliedAt: serverTimestamp(),
+      };
+      creditDelta = CANCELLATION_FEE_AMOUNT;
+    }
+
     try {
-      await updateDoc(doc(db, "appointments", id), { status: "cancelled" });
-      Alert.alert("❌ בוטל", "התור בוטל בהצלחה");
+      await updateDoc(appointmentRef, updates);
+
+      if (creditDelta !== 0 && booking.userId) {
+        await setDoc(
+          doc(db, "users", booking.userId),
+          {
+            cancellationCredit: increment(creditDelta),
+          },
+          { merge: true }
+        );
+        setCancellationCredit((prev) => prev + creditDelta);
+      }
+
+      if (penaltyAlreadyApplied && applyFee) {
+        showNotification(
+          "info",
+          "התור בוטל ודמי הביטול כבר חושבו עבורך בעבר."
+        );
+      } else if (creditDelta > 0) {
+        showNotification(
+          "warning",
+          `התור בוטל. שימי לב שחויבת בדמי ביטול של ${formatILS(
+            CANCELLATION_FEE_AMOUNT
+          )}.`
+        );
+      } else {
+        showNotification("success", "התור בוטל בהצלחה");
+      }
+
+      setBookings((prev) =>
+        prev.map((item) => {
+          if (item.id !== booking.id) return item;
+          const next = {
+            ...item,
+            status: "cancelled",
+          };
+          if (updates.penalty) {
+            next.penalty = updates.penalty;
+          }
+          return next;
+        })
+      );
+
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לבטל את התור");
     }
   };
 
@@ -389,23 +465,29 @@ export default function MyBookings() {
     if (!selectedBooking) return;
 
     if (!rescheduleDate || !rescheduleTime) {
-      Alert.alert("שגיאה", "אנא בחר תאריך ושעה החדשים לתור");
+      showNotification("error", "אנא בחרי תאריך ושעה חדשים לתור");
       return;
     }
 
     const option = dateOptions.find((item) => item.value === rescheduleDate);
     if (!option || option.disabled) {
-      Alert.alert("שגיאה", "התאריך שנבחר אינו זמין להזמנה");
+      showNotification("error", "התאריך שנבחר אינו זמין להזמנה");
       return;
     }
 
     if (!availableHours.includes(rescheduleTime)) {
-      Alert.alert("שגיאה", "השעה שנבחרה אינה תואמת את שעות הפעילות");
+      showNotification("error", "השעה שנבחרה אינה תואמת את שעות הפעילות");
       return;
     }
 
     if (rescheduleBookedTimes.has(rescheduleTime)) {
-      Alert.alert("שעה תפוסה", "מישהו כבר קבע לשעה הזו. בחר שעה אחרת.");
+      showNotification("error", "השעה שנבחרה כבר נתפסה, בחרי שעה אחרת");
+      return;
+    }
+
+    if (isBookingTimeElapsed(selectedBooking)) {
+      showNotification("error", "לא ניתן לדחות תור שכבר התחיל או עבר");
+      closeRescheduleModal();
       return;
     }
 
@@ -415,11 +497,11 @@ export default function MyBookings() {
         time: rescheduleTime,
         status: "rescheduled",
       });
-      Alert.alert("✅ עודכן", "התור נדחה בהצלחה");
+      showNotification("success", "התור נדחה בהצלחה");
       closeRescheduleModal();
       fetchBookings();
     } catch (error) {
-      Alert.alert("שגיאה", error.message);
+      showNotification("error", error.message || "לא הצלחנו לדחות את התור");
     }
   };
 
@@ -434,8 +516,22 @@ export default function MyBookings() {
 
   return (
     <LinearGradient colors={["#f5f7fa", "#e4ebf1"]} style={styles.container}>
+      <View style={styles.notificationWrapper} pointerEvents="box-none">
+        <InlineNotification
+          key={notification?.id || "bookingsNotification"}
+          visible={Boolean(notification?.message)}
+          type={notification?.type}
+          message={notification?.message}
+          onClose={() => setNotification(null)}
+        />
+      </View>
       {/* 🔹 כותרת */}
-      <View style={styles.header}>
+      <View
+        style={[
+          styles.header,
+          notification?.message && styles.headerShifted,
+        ]}
+      >
         <TouchableOpacity
           onPress={() => router.replace("/Profile")}
           style={styles.backBtn}
@@ -446,13 +542,31 @@ export default function MyBookings() {
         <Text style={styles.headerTitle}>התורים שלי</Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 80 }}>
+      <View
+        style={[
+          styles.creditBanner,
+          notification?.message && styles.creditBannerShifted,
+        ]}
+      >
+        <Text style={styles.creditBannerTitle}>יתרת דמי ביטול</Text>
+        <Text style={styles.creditBannerValue}>
+          {formatILS(cancellationCredit)}
+        </Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          notification?.message && styles.scrollContentShifted,
+        ]}
+      >
         {bookings.length === 0 ? (
           <Text style={styles.noBookings}>אין לך תורים כרגע.</Text>
         ) : (
           bookings.map((b) => {
             const displayDate = formatBookingDateForDisplay(b.date);
             const displayTime = normaliseBookingTime(b.time) || b.time;
+            const elapsed = isBookingTimeElapsed(b);
 
             return (
               <View key={b.id} style={styles.card}>
@@ -482,28 +596,51 @@ export default function MyBookings() {
                     : "ממתין לאישור"}
                 </Text>
 
+                {b.penalty?.applied && (
+                  <Text style={[styles.penaltyInfo, styles.rtl]}>
+                    💳 דמי ביטול: {formatILS(b.penalty?.amount || CANCELLATION_FEE_AMOUNT)}
+                    {b.penalty?.reason
+                      ? ` · ${getCancellationFeeReasonLabel(b.penalty.reason)}`
+                      : ""}
+                  </Text>
+                )}
+
+                {b.attendanceStatus === "no_show" && (
+                  <Text style={[styles.attendanceAlert, styles.rtl]}>
+                    העסק דיווח שלא הגעת לתור.
+                  </Text>
+                )}
+
+                {b.attendanceStatus === "arrived" && (
+                  <Text style={[styles.attendanceInfo, styles.rtl]}>
+                    העסק אישר שהגעת לתור.
+                  </Text>
+                )}
+
                 {b.status !== "cancelled" && (
                   <View style={styles.buttonsRow}>
                     <TouchableOpacity
                       style={styles.cancelButton}
-                      onPress={() => handleCancel(b.id)}
+                      onPress={() => handleCancel(b)}
                     >
                       <Text style={styles.cancelText}>בטל תור</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.rescheduleButton}
-                      onPress={() => {
-                        setRescheduleBusiness(null);
-                        setRescheduleBookedTimes(new Set());
-                        setRescheduleDate("");
-                        setRescheduleTime("");
-                        setSelectedBooking(b);
-                        setRescheduleVisible(true);
-                      }}
-                    >
-                      <Text style={styles.rescheduleText}>דחה תור</Text>
-                    </TouchableOpacity>
+                    {!elapsed && (
+                      <TouchableOpacity
+                        style={styles.rescheduleButton}
+                        onPress={() => {
+                          setRescheduleBusiness(null);
+                          setRescheduleBookedTimes(new Set());
+                          setRescheduleDate("");
+                          setRescheduleTime("");
+                          setSelectedBooking(b);
+                          setRescheduleVisible(true);
+                        }}
+                      >
+                        <Text style={styles.rescheduleText}>דחה תור</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
               </View>
@@ -654,6 +791,14 @@ export default function MyBookings() {
 }
 
 const styles = StyleSheet.create({
+  notificationWrapper: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    zIndex: 20,
+  },
   rtl: { textAlign: "right", writingDirection: "rtl" },
   container: { flex: 1 },
 
@@ -664,12 +809,43 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  headerShifted: {
+    marginTop: 130,
+  },
   backBtn: {
     position: "absolute",
     left: 25,
     top: 0,
   },
   headerTitle: { fontSize: 22, fontWeight: "900", color: "#3e3e63" },
+
+  creditBanner: {
+    marginHorizontal: 25,
+    marginTop: 20,
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+    alignItems: "center",
+  },
+  creditBannerShifted: {
+    marginTop: 150,
+  },
+  creditBannerTitle: {
+    fontSize: 14,
+    color: "#7c8095",
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  creditBannerValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#3e3e63",
+  },
 
   // 🔹 תוכן
   card: {
@@ -690,6 +866,21 @@ const styles = StyleSheet.create({
   pending: { color: "#f39c12" },
   cancelled: { color: "#e74c3c" },
   rescheduled: { color: "#3498db" },
+  penaltyInfo: {
+    marginTop: 6,
+    color: "#b34700",
+    fontWeight: "600",
+  },
+  attendanceAlert: {
+    marginTop: 4,
+    color: "#d35400",
+    fontWeight: "600",
+  },
+  attendanceInfo: {
+    marginTop: 4,
+    color: "#2c7a7b",
+    fontWeight: "600",
+  },
   buttonsRow: {
     flexDirection: "row-reverse",
     justifyContent: "space-between",
@@ -720,6 +911,12 @@ const styles = StyleSheet.create({
     color: "#666",
     marginTop: 100,
     fontSize: 16,
+  },
+  scrollContent: {
+    paddingBottom: 80,
+  },
+  scrollContentShifted: {
+    paddingTop: 100,
   },
   loadingContainer: {
     flex: 1,
