@@ -53,7 +53,7 @@ export default function HomeClient() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [userName, setUserName] = useState(null);
-  const [userAvatarId, setUserAvatarId] = useState(defaultAvatarId);
+  const [userAvatarId, setUserAvatar] = useState(defaultAvatarId);
   const router = useRouter();
 
   // ✅ שליפת עסקים והאזנה למצב המשתמש
@@ -85,7 +85,7 @@ export default function HomeClient() {
       if (!isMounted) return;
       if (!user) {
         setUserName("אורח");
-        setUserAvatarId(defaultAvatarId);
+        setUserAvatar(defaultAvatarId);
         return;
       }
 
@@ -99,7 +99,7 @@ export default function HomeClient() {
           const snap = await getDoc(ref);
           if (!snap.exists()) {
             if (isMounted) {
-              setUserAvatarId(defaultAvatarId);
+              setUserAvatar(defaultAvatarId);
             }
             return;
           }
@@ -112,12 +112,12 @@ export default function HomeClient() {
             const avatarId = isValidAvatarId(data?.avatar)
               ? data.avatar
               : defaultAvatarId;
-            setUserAvatarId(avatarId);
+            setUserAvatar(avatarId);
           }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
           if (isMounted) {
-            setUserAvatarId(defaultAvatarId);
+            setUserAvatar(defaultAvatarId);
           }
         }
       };
