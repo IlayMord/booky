@@ -40,6 +40,8 @@ import { formatILS } from "../utils/currency";
 
 const MAX_GALLERY_IMAGES = 12;
 
+const MAX_GALLERY_IMAGES = 12;
+
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 30;

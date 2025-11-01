@@ -160,7 +160,7 @@ const getExperienceImage = (booking) => {
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [notification, setNotification] = useState(null);
+  const [inlineNotification, setInlineNotification] = useState(null);
   const [activeTab, setActiveTab] = useState("upcoming");
   const [rescheduleVisible, setRescheduleVisible] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
@@ -174,7 +174,7 @@ export default function MyBookings() {
   const router = useRouter();
 
   const showNotification = (type, message) => {
-    setNotification({ type, message, id: Date.now() });
+    setInlineNotification({ type, message, id: Date.now() });
   };
 
   const fetchBookings = async () => {
@@ -628,11 +628,11 @@ export default function MyBookings() {
     <LinearGradient colors={["#f5f7fa", "#e4ebf1"]} style={styles.container}>
       <View style={styles.notificationWrapper} pointerEvents="box-none">
         <InlineNotification
-          key={notification?.id || "bookingsNotification"}
-          visible={Boolean(notification?.message)}
-          type={notification?.type}
-          message={notification?.message}
-          onClose={() => setNotification(null)}
+          key={inlineNotification?.id || "bookingsNotification"}
+          visible={Boolean(inlineNotification?.message)}
+          type={inlineNotification?.type}
+          message={inlineNotification?.message}
+          onClose={() => setInlineNotification(null)}
         />
       </View>
 
