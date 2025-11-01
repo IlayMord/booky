@@ -141,6 +141,7 @@ export default function BusinessPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedTime, setSelectedTime] = useState("");
+  const [selectedGalleryImage, setSelectedGalleryImage] = useState(null);
 
   // 🆕 ננהל סט של שעות תפוסות עבור היום הנבחר
   const [bookedTimes, setBookedTimes] = useState(new Set());
@@ -253,6 +254,12 @@ export default function BusinessPage() {
             ...businessData,
             weeklyHours: normalizedWeeklyHours,
           });
+          const gallery = businessData.galleryImages;
+          if (Array.isArray(gallery) && gallery.length > 0) {
+            setSelectedGalleryImage((prev) => prev || gallery[0]);
+          } else {
+            setSelectedGalleryImage(null);
+          }
         }
       } catch (err) {
         console.error("שגיאה בשליפת עסק:", err);
@@ -262,6 +269,14 @@ export default function BusinessPage() {
     };
     fetchBusiness();
   }, [id]);
+
+  useEffect(() => {
+    if (!Array.isArray(business?.galleryImages) || business.galleryImages.length === 0) {
+      setSelectedGalleryImage(null);
+      return;
+    }
+    setSelectedGalleryImage((current) => current || business.galleryImages[0]);
+  }, [business?.galleryImages]);
 
   useEffect(() => {
     if (selectedTime && !availableHours.includes(selectedTime)) {
@@ -351,6 +366,8 @@ export default function BusinessPage() {
       await addDoc(collection(db, "appointments"), {
         businessId: id,
         businessName: business?.name || "",
+        businessImage: business?.image || null,
+        businessPhone: business?.phone || "",
         userId: user.uid,
         userName: user.displayName || "משתמש",
         userPhone: user.phoneNumber || "",
@@ -358,6 +375,7 @@ export default function BusinessPage() {
         time: selectedTime,
         status,
         createdAt: serverTimestamp(),
+        galleryImage: selectedGalleryImage || null,
       });
 
       Alert.alert(
@@ -447,6 +465,36 @@ export default function BusinessPage() {
         <Text style={styles.infoValue}>{business.address || "לא צוינה כתובת"}</Text>
         <Ionicons name="location-outline" size={18} color="#6C63FF" />
       </View>
+      {Array.isArray(business.galleryImages) && business.galleryImages.length > 0 && (
+        <View style={styles.galleryPicker}>
+          <Text style={styles.galleryPickerTitle}>בחרו את האווירה שתרצו להדגיש</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.galleryPickerScroll}
+          >
+            {business.galleryImages.map((image, index) => {
+              const uri = image?.uri || image;
+              if (!uri) {
+                return null;
+              }
+              const imageId = image?.id || `${index}`;
+              const isSelected =
+                selectedGalleryImage?.id === imageId || selectedGalleryImage?.uri === uri;
+              return (
+                <TouchableOpacity
+                  key={imageId}
+                  style={[styles.galleryPickerItem, isSelected && styles.galleryPickerItemSelected]}
+                  onPress={() => setSelectedGalleryImage({ id: imageId, uri })}
+                  activeOpacity={0.85}
+                >
+                  <Image source={{ uri }} style={styles.galleryPickerImage} />
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
       {business.address ? (
         <View style={styles.navigationRow}>
           <TouchableOpacity
@@ -647,6 +695,35 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     textAlign: "right",
+  },
+  galleryPicker: {
+    marginTop: 16,
+  },
+  galleryPickerTitle: {
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+    marginBottom: 10,
+  },
+  galleryPickerScroll: {
+    flexDirection: "row-reverse",
+    gap: 12,
+  },
+  galleryPickerItem: {
+    width: 100,
+    height: 80,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginLeft: 12,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  galleryPickerItemSelected: {
+    borderColor: "#6C63FF",
+  },
+  galleryPickerImage: {
+    width: "100%",
+    height: "100%",
   },
   navigationRow: {
     flexDirection: "row",
