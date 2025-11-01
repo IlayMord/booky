@@ -6,32 +6,27 @@ import {
   doc,
   getDoc,
   getDocs,
-  increment,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Linking,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import InlineNotification from "../components/InlineNotification";
-import {
-  CANCELLATION_FEE_AMOUNT,
-  CANCELLATION_FEE_WINDOW_HOURS,
-  getCancellationFeeReasonLabel,
-} from "../constants/fees";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
-import { formatILS } from "../utils/currency";
 import {
   formatBookingDateForDisplay,
   formatDateKey,
@@ -110,9 +105,63 @@ const resolveOperatingWindowForDay = (business, dayKey) => {
   return { opening, closing };
 };
 
+const getStatusMeta = (booking) => {
+  switch (booking?.status) {
+    case "approved":
+      return { label: "מאושר", background: "#e6f5ef", color: "#17874c" };
+    case "pending":
+      return { label: "ממתין לאישור", background: "#fff6e6", color: "#a86a00" };
+    case "cancelled":
+      return { label: "בוטל", background: "#ffe5e9", color: "#c62828" };
+    case "rescheduled":
+      return { label: "נדחה", background: "#e5ecff", color: "#3c4cd9" };
+    default:
+      return { label: "בתהליך", background: "#e8e9ff", color: "#4437a6" };
+  }
+};
+
+const describeTiming = (booking) => {
+  const hours = getHoursUntilBooking(booking);
+  if (hours === null) {
+    return "";
+  }
+  if (hours <= 0) {
+    return "התור כבר החל או הסתיים";
+  }
+  if (hours < 1) {
+    return "מתחיל ממש עכשיו";
+  }
+  if (hours < 24) {
+    return `מתחיל בעוד כ-${Math.round(hours)} שעות`;
+  }
+  const days = Math.round(hours / 24);
+  return days === 1 ? "מחר" : `בעוד ${days} ימים`;
+};
+
+const getExperienceImage = (booking) => {
+  if (booking?.galleryImage?.uri) {
+    return booking.galleryImage.uri;
+  }
+  if (typeof booking?.galleryImage === "string") {
+    return booking.galleryImage;
+  }
+  if (booking?.selectedGalleryImage?.uri) {
+    return booking.selectedGalleryImage.uri;
+  }
+  if (typeof booking?.selectedGalleryImage === "string") {
+    return booking.selectedGalleryImage;
+  }
+  if (booking?.businessImage) {
+    return booking.businessImage;
+  }
+  return null;
+};
+
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [notification, setNotification] = useState(null);
+  const [activeTab, setActiveTab] = useState("upcoming");
   const [rescheduleVisible, setRescheduleVisible] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState(null);
   const [rescheduleBusiness, setRescheduleBusiness] = useState(null);
@@ -128,20 +177,11 @@ export default function MyBookings() {
     setNotification({ type, message, id: Date.now() });
   };
 
-  const shouldApplyLateCancellationFee = (booking) => {
-    const hoursUntil = getHoursUntilBooking(booking);
-    if (hoursUntil === null) {
-      return false;
-    }
-    return hoursUntil <= CANCELLATION_FEE_WINDOW_HOURS;
-  };
-
   const fetchBookings = async () => {
     try {
       const user = auth.currentUser;
       if (!user) {
         setBookings([]);
-        setCancellationCredit(0);
         await syncAppointmentNotifications([], { enabled: false });
         return;
       }
@@ -159,30 +199,19 @@ export default function MyBookings() {
         const userRef = doc(db, "users", user.uid);
         const userDoc = await getDoc(userRef);
         if (userDoc.exists()) {
-          const data = userDoc.data() || {};
-          const preferences = data.preferences || {};
+          const preferences = userDoc.data()?.preferences || {};
           if (typeof preferences.pushNotifications === "boolean") {
             pushEnabled = preferences.pushNotifications;
           }
-          const creditValue = Number(data.cancellationCredit);
-          setCancellationCredit(
-            Number.isFinite(creditValue) ? creditValue : 0
-          );
-        } else {
-          setCancellationCredit(0);
         }
       } catch (preferencesError) {
         console.error("Error fetching user preferences:", preferencesError);
-        setCancellationCredit(0);
       }
 
       try {
         await syncAppointmentNotifications(data, { enabled: pushEnabled });
       } catch (notificationError) {
-        console.error(
-          "Error syncing appointment notifications:",
-          notificationError
-        );
+        console.error("Error syncing appointment notifications:", notificationError);
       }
     } catch (error) {
       console.error("Error fetching bookings:", error);
@@ -195,32 +224,13 @@ export default function MyBookings() {
     fetchBookings();
   }, []);
 
-  const originalBookingDate = useMemo(
-    () => normaliseBookingDate(selectedBooking?.date),
-    [selectedBooking?.date]
-  );
-  const originalBookingTime = useMemo(
-    () => normaliseBookingTime(selectedBooking?.time),
-    [selectedBooking?.time]
-  );
-
-  const bookingWindowLimit = useMemo(
-    () => clampBookingWindow(rescheduleBusiness?.bookingWindowDays),
-    [rescheduleBusiness?.bookingWindowDays]
-  );
-
-  const bookingIntervalMinutes = useMemo(
-    () => clampSlotInterval(rescheduleBusiness?.bookingIntervalMinutes),
-    [rescheduleBusiness?.bookingIntervalMinutes]
-  );
-
   useEffect(() => {
-    const loadBusiness = async () => {
-      if (!selectedBooking?.businessId) {
-        setRescheduleBusiness(null);
-        return;
-      }
+    if (!rescheduleVisible || !selectedBooking?.businessId) {
+      setRescheduleBusiness(null);
+      return;
+    }
 
+    const loadBusiness = async () => {
       setRescheduleLoading(true);
       try {
         const ref = doc(db, "businesses", selectedBooking.businessId);
@@ -238,16 +248,33 @@ export default function MyBookings() {
       }
     };
 
-    if (rescheduleVisible) {
-      loadBusiness();
-    }
+    loadBusiness();
   }, [rescheduleVisible, selectedBooking?.businessId]);
+
+  const originalBookingDate = useMemo(
+    () => normaliseBookingDate(selectedBooking?.date),
+    [selectedBooking?.date]
+  );
+  const originalBookingTime = useMemo(
+    () => normaliseBookingTime(selectedBooking?.time),
+    [selectedBooking?.time]
+  );
 
   useEffect(() => {
     if (!rescheduleVisible) return;
     setRescheduleDate(originalBookingDate);
     setRescheduleTime(originalBookingTime);
   }, [originalBookingDate, originalBookingTime, rescheduleVisible]);
+
+  const bookingWindowLimit = useMemo(
+    () => clampBookingWindow(rescheduleBusiness?.bookingWindowDays),
+    [rescheduleBusiness?.bookingWindowDays]
+  );
+
+  const bookingIntervalMinutes = useMemo(
+    () => clampSlotInterval(rescheduleBusiness?.bookingIntervalMinutes),
+    [rescheduleBusiness?.bookingIntervalMinutes]
+  );
 
   const dateOptions = useMemo(() => {
     if (!rescheduleBusiness) return [];
@@ -380,84 +407,42 @@ export default function MyBookings() {
     setRescheduleBookedTimes(new Set());
   };
 
+  const confirmCancel = (booking) => {
+    Alert.alert(
+      "ביטול תור",
+      "האם לבטל את התור הקרוב?",
+      [
+        { text: "חזרה", style: "cancel" },
+        {
+          text: "בטל",
+          style: "destructive",
+          onPress: () => handleCancel(booking),
+        },
+      ]
+    );
+  };
+
   const handleCancel = async (booking) => {
     if (!booking?.id) {
       return;
     }
 
-    const user = auth.currentUser;
-    const appointmentRef = doc(db, "appointments", booking.id);
-    const applyFee = shouldApplyLateCancellationFee(booking);
-    const hasExistingPenalty = Boolean(booking?.penalty?.applied);
-    const penaltyAlreadyApplied =
-      hasExistingPenalty && booking?.penalty?.reason === "late_cancellation";
-
-    const baseTimestamp = serverTimestamp();
-    const updates = {
-      status: "cancelled",
-      cancelledAt: baseTimestamp,
-      cancelledBy: user?.uid || null,
-    };
-
-    let creditDelta = 0;
-
-    if (applyFee && !hasExistingPenalty) {
-      updates.penalty = {
-        applied: true,
-        amount: CANCELLATION_FEE_AMOUNT,
-        reason: "late_cancellation",
-        appliedAt: serverTimestamp(),
-      };
-      creditDelta = CANCELLATION_FEE_AMOUNT;
-    }
-
     try {
-      await updateDoc(appointmentRef, updates);
+      await updateDoc(doc(db, "appointments", booking.id), {
+        status: "cancelled",
+        cancelledAt: serverTimestamp(),
+        cancelledBy: auth.currentUser?.uid || null,
+      });
 
-      if (creditDelta !== 0 && booking.userId) {
-        await setDoc(
-          doc(db, "users", booking.userId),
-          {
-            cancellationCredit: increment(creditDelta),
-          },
-          { merge: true }
-        );
-        setCancellationCredit((prev) => prev + creditDelta);
-      }
-
-      if (penaltyAlreadyApplied && applyFee) {
-        showNotification(
-          "info",
-          "התור בוטל ודמי הביטול כבר חושבו עבורך בעבר."
-        );
-      } else if (creditDelta > 0) {
-        showNotification(
-          "warning",
-          `התור בוטל. שימי לב שחויבת בדמי ביטול של ${formatILS(
-            CANCELLATION_FEE_AMOUNT
-          )}.`
-        );
-      } else {
-        showNotification("success", "התור בוטל בהצלחה");
-      }
-
+      showNotification("success", "התור בוטל בהצלחה.");
       setBookings((prev) =>
-        prev.map((item) => {
-          if (item.id !== booking.id) return item;
-          const next = {
-            ...item,
-            status: "cancelled",
-          };
-          if (updates.penalty) {
-            next.penalty = updates.penalty;
-          }
-          return next;
-        })
+        prev.map((item) =>
+          item.id === booking.id ? { ...item, status: "cancelled" } : item
+        )
       );
-
       fetchBookings();
     } catch (error) {
-      showNotification("error", error.message || "לא הצלחנו לבטל את התור");
+      showNotification("error", error.message || "לא הצלחנו לבטל את התור.");
     }
   };
 
@@ -505,6 +490,131 @@ export default function MyBookings() {
     }
   };
 
+  const handleContact = async (booking) => {
+    const phone = booking?.businessPhone || booking?.userPhone;
+    if (!phone) {
+      showNotification("info", "לבעל העסק אין מספר טלפון זמין במערכת");
+      return;
+    }
+    try {
+      await Linking.openURL(`tel:${phone}`);
+    } catch (error) {
+      console.error("Failed to launch phone dialer", error);
+      showNotification("error", "לא הצלחנו לפתוח את חיוג הטלפון.");
+    }
+  };
+
+  const openReschedule = (booking) => {
+    setSelectedBooking(booking);
+    setRescheduleVisible(true);
+  };
+
+  const upcomingBookings = useMemo(
+    () =>
+      bookings.filter(
+        (booking) =>
+          booking.status !== "cancelled" && !isBookingTimeElapsed(booking)
+      ),
+    [bookings]
+  );
+
+  const historyBookings = useMemo(
+    () =>
+      bookings.filter(
+        (booking) => booking.status === "cancelled" || isBookingTimeElapsed(booking)
+      ),
+    [bookings]
+  );
+
+  const pendingCount = useMemo(
+    () => bookings.filter((booking) => booking.status === "pending").length,
+    [bookings]
+  );
+
+  const upcomingCount = upcomingBookings.length;
+  const historyCount = historyBookings.length;
+
+  const activeList = activeTab === "history" ? historyBookings : upcomingBookings;
+
+  const renderBookingCard = (booking) => {
+    const statusMeta = getStatusMeta(booking);
+    const experienceImage = getExperienceImage(booking);
+    const timingText = describeTiming(booking);
+    const canModify =
+      booking.status !== "cancelled" && !isBookingTimeElapsed(booking);
+    const canReschedule = canModify && booking.status !== "pending";
+    const canCancel = canModify;
+
+    return (
+      <View key={booking.id} style={styles.bookingCard}>
+        <View style={styles.bookingHeader}>
+          <View style={styles.bookingHeaderText}>
+            <Text style={styles.bookingBusiness}>{booking.businessName}</Text>
+            <Text style={styles.bookingTime}>
+              {formatBookingDateForDisplay(booking.date)} • {normaliseBookingTime(booking.time)}
+            </Text>
+          </View>
+          <View
+            style={[styles.statusPill, { backgroundColor: statusMeta.background }]}
+          >
+            <Text style={[styles.statusText, { color: statusMeta.color }]}>
+              {statusMeta.label}
+            </Text>
+          </View>
+        </View>
+
+        {experienceImage ? (
+          <Image source={{ uri: experienceImage }} style={styles.bookingImage} />
+        ) : (
+          <View style={styles.bookingImagePlaceholder}>
+            <Ionicons name="image-outline" size={36} color="#a1a7c8" />
+          </View>
+        )}
+
+        {booking.notes ? (
+          <Text style={styles.bookingNotes} numberOfLines={2}>
+            {booking.notes}
+          </Text>
+        ) : null}
+
+        {timingText ? (
+          <View style={styles.bookingMetaRow}>
+            <Ionicons name="time-outline" size={16} color="#6C63FF" />
+            <Text style={styles.bookingMetaText}>{timingText}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.bookingActionsRow}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.actionSecondary]}
+            onPress={() => handleContact(booking)}
+          >
+            <Ionicons name="chatbubbles-outline" size={16} color="#6C63FF" />
+            <Text style={styles.actionSecondaryText}>צור קשר</Text>
+          </TouchableOpacity>
+          {canReschedule && (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.actionPrimary]}
+              onPress={() => openReschedule(booking)}
+            >
+              <Ionicons name="calendar-outline" size={16} color="#fff" />
+              <Text style={styles.actionPrimaryText}>דחי תור</Text>
+            </TouchableOpacity>
+          )}
+          {canCancel && (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.actionDanger]}
+              onPress={() => confirmCancel(booking)}
+            >
+              <Ionicons name="close-circle-outline" size={16} color="#fff" />
+              <Text style={styles.actionPrimaryText}>בטל</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -525,155 +635,113 @@ export default function MyBookings() {
           onClose={() => setNotification(null)}
         />
       </View>
-      {/* 🔹 כותרת */}
-      <View
-        style={[
-          styles.header,
-          notification?.message && styles.headerShifted,
-        ]}
-      >
-        <TouchableOpacity
-          onPress={() => router.replace("/Profile")}
-          style={styles.backBtn}
-        >
-          <Ionicons name="arrow-back" size={26} color="#6C63FF" />
-        </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>התורים שלי</Text>
-      </View>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.heroCard}>
+          <TouchableOpacity
+            style={styles.heroBack}
+            onPress={() => router.replace("/")}
+          >
+            <Ionicons name="arrow-back" size={20} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.heroTitle}>התורים שלי</Text>
+          <Text style={styles.heroSubtitle}>
+            עקבי אחרי הלו&quot;ז שלך, עם חוויית ניהול אולטרה מודרנית
+          </Text>
+          <View style={styles.heroStatsRow}>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatValue}>{upcomingCount}</Text>
+              <Text style={styles.heroStatLabel}>תורים קרובים</Text>
+            </View>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatValue}>{pendingCount}</Text>
+              <Text style={styles.heroStatLabel}>ממתינים לאישור</Text>
+            </View>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatValue}>{historyCount}</Text>
+              <Text style={styles.heroStatLabel}>תורים עברו</Text>
+            </View>
+          </View>
+        </View>
 
-      <View
-        style={[
-          styles.creditBanner,
-          notification?.message && styles.creditBannerShifted,
-        ]}
-      >
-        <Text style={styles.creditBannerTitle}>יתרת דמי ביטול</Text>
-        <Text style={styles.creditBannerValue}>
-          {formatILS(cancellationCredit)}
-        </Text>
-      </View>
+        <View style={styles.segmentRow}>
+          <TouchableOpacity
+            style={[styles.segmentButton, activeTab === "upcoming" && styles.segmentButtonActive]}
+            onPress={() => setActiveTab("upcoming")}
+          >
+            <Text
+              style={[styles.segmentText, activeTab === "upcoming" && styles.segmentTextActive]}
+            >
+              קרובים
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentButton, activeTab === "history" && styles.segmentButtonActive]}
+            onPress={() => setActiveTab("history")}
+          >
+            <Text
+              style={[styles.segmentText, activeTab === "history" && styles.segmentTextActive]}
+            >
+              היסטוריה
+            </Text>
+          </TouchableOpacity>
+        </View>
 
-      <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          notification?.message && styles.scrollContentShifted,
-        ]}
-      >
-        {bookings.length === 0 ? (
-          <Text style={styles.noBookings}>אין לך תורים כרגע.</Text>
+        {activeList.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="calendar-clear-outline" size={48} color="#b4bbd6" />
+            <Text style={styles.emptyTitle}>
+              {activeTab === "upcoming"
+                ? "אין לך תורים קרובים"
+                : "עוד לא נבנתה היסטוריה"}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {activeTab === "upcoming"
+                ? "גלי עסקים חדשים וקבעי תור ראשון כבר היום"
+                : "כשתסיימי תור, הוא יופיע כאן עם כל הפרטים"}
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyAction}
+              onPress={() => router.replace("/")}
+            >
+              <Ionicons name="search-outline" size={18} color="#fff" />
+              <Text style={styles.emptyActionText}>חיפוש עסק</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
-          bookings.map((b) => {
-            const displayDate = formatBookingDateForDisplay(b.date);
-            const displayTime = normaliseBookingTime(b.time) || b.time;
-            const elapsed = isBookingTimeElapsed(b);
-
-            return (
-              <View key={b.id} style={styles.card}>
-                <Text style={[styles.business, styles.rtl]}>{b.businessName}</Text>
-                <Text style={[styles.detail, styles.rtl]}>
-                  📅 {displayDate} | ⏰ {displayTime}
-                </Text>
-                <Text
-                  style={[
-                    styles.status,
-                    styles.rtl,
-                    b.status === "approved"
-                      ? styles.approved
-                      : b.status === "cancelled"
-                      ? styles.cancelled
-                      : b.status === "rescheduled"
-                      ? styles.rescheduled
-                      : styles.pending,
-                  ]}
-                >
-                  {b.status === "approved"
-                    ? "מאושר"
-                    : b.status === "cancelled"
-                    ? "בוטל"
-                    : b.status === "rescheduled"
-                    ? "נדחה"
-                    : "ממתין לאישור"}
-                </Text>
-
-                {b.penalty?.applied && (
-                  <Text style={[styles.penaltyInfo, styles.rtl]}>
-                    💳 דמי ביטול: {formatILS(b.penalty?.amount || CANCELLATION_FEE_AMOUNT)}
-                    {b.penalty?.reason
-                      ? ` · ${getCancellationFeeReasonLabel(b.penalty.reason)}`
-                      : ""}
-                  </Text>
-                )}
-
-                {b.attendanceStatus === "no_show" && (
-                  <Text style={[styles.attendanceAlert, styles.rtl]}>
-                    העסק דיווח שלא הגעת לתור.
-                  </Text>
-                )}
-
-                {b.attendanceStatus === "arrived" && (
-                  <Text style={[styles.attendanceInfo, styles.rtl]}>
-                    העסק אישר שהגעת לתור.
-                  </Text>
-                )}
-
-                {b.status !== "cancelled" && (
-                  <View style={styles.buttonsRow}>
-                    <TouchableOpacity
-                      style={styles.cancelButton}
-                      onPress={() => handleCancel(b)}
-                    >
-                      <Text style={styles.cancelText}>בטל תור</Text>
-                    </TouchableOpacity>
-
-                    {!elapsed && (
-                      <TouchableOpacity
-                        style={styles.rescheduleButton}
-                        onPress={() => {
-                          setRescheduleBusiness(null);
-                          setRescheduleBookedTimes(new Set());
-                          setRescheduleDate("");
-                          setRescheduleTime("");
-                          setSelectedBooking(b);
-                          setRescheduleVisible(true);
-                        }}
-                      >
-                        <Text style={styles.rescheduleText}>דחה תור</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-              </View>
-            );
-          })
+          <View style={styles.list}>
+            {activeList.map(renderBookingCard)}
+          </View>
         )}
       </ScrollView>
 
-      {/* 🔹 חלונית דחייה */}
-      <Modal visible={rescheduleVisible} transparent animationType="slide">
+      <Modal
+        visible={rescheduleVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closeRescheduleModal}
+      >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={[styles.modalTitle, styles.rtl]}>
-              דחיית תור — {selectedBooking?.businessName}
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>דחיית תור</Text>
+            <Text style={styles.modalSubtitle}>
+              בחרי יום ושעה חדשים – אנחנו נעדכן את העסק עבורך
             </Text>
 
-            {rescheduleLoading ? (
+            {rescheduleLoading && (
               <View style={styles.modalLoading}>
                 <ActivityIndicator color="#6C63FF" />
+                <Text style={styles.modalLoadingText}>טוען שעות פעילות...</Text>
               </View>
-            ) : !rescheduleBusiness ? (
-              <Text style={[styles.modalInfo, styles.rtl]}>
-                לא הצלחנו לטעון את הגדרות העסק. נסה שוב מאוחר יותר.
-              </Text>
-            ) : (
+            )}
+
+            {rescheduleBusiness && (
               <>
-                <Text style={[styles.modalSectionTitle, styles.rtl]}>
-                  בחר תאריך ({bookingWindowLimit} ימים קדימה)
-                </Text>
+                <Text style={styles.modalSectionTitle}>בחרי תאריך</Text>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.modalDateScroll}
+                  contentContainerStyle={styles.modalDatesRow}
                 >
                   {dateOptions.map((option) => {
                     const isSelected = rescheduleDate === option.value;
@@ -711,12 +779,12 @@ export default function MyBookings() {
                   })}
                 </ScrollView>
                 {!dateOptions.some((option) => !option.disabled) && (
-                  <Text style={[styles.modalInfo, styles.rtl]}>
+                  <Text style={styles.modalInfo}>
                     אין תאריכים זמינים על פי ההגדרות הנוכחיות
                   </Text>
                 )}
 
-                <Text style={[styles.modalSectionTitle, styles.rtl]}>בחר שעה</Text>
+                <Text style={styles.modalSectionTitle}>בחרי שעה</Text>
                 {availableHours.length ? (
                   <View style={styles.modalHoursContainer}>
                     {availableHours.map((slot) => {
@@ -747,9 +815,7 @@ export default function MyBookings() {
                     })}
                   </View>
                 ) : (
-                  <Text style={[styles.modalInfo, styles.rtl]}>
-                    אין שעות פעילות לתאריך שבחרת
-                  </Text>
+                  <Text style={styles.modalInfo}>אין שעות פעילות לתאריך שבחרת</Text>
                 )}
               </>
             )}
@@ -791,6 +857,20 @@ export default function MyBookings() {
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f5f7fa",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#5b6473",
+    fontWeight: "600",
+  },
   notificationWrapper: {
     position: "absolute",
     top: 50,
@@ -799,271 +879,382 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     zIndex: 20,
   },
-  rtl: { textAlign: "right", writingDirection: "rtl" },
-  container: { flex: 1 },
-
-  // 🔹 כותרת
-  header: {
-    marginTop: 50,
-    paddingHorizontal: 25,
+  scrollContent: {
+    paddingBottom: 120,
+  },
+  heroCard: {
+    marginTop: 60,
+    marginHorizontal: 20,
+    backgroundColor: "#1f1b5c",
+    borderRadius: 24,
+    padding: 22,
+    overflow: "hidden",
+  },
+  heroBack: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
+    alignSelf: "flex-start",
   },
-  headerShifted: {
-    marginTop: 130,
-  },
-  backBtn: {
-    position: "absolute",
-    left: 25,
-    top: 0,
-  },
-  headerTitle: { fontSize: 22, fontWeight: "900", color: "#3e3e63" },
-
-  creditBanner: {
-    marginHorizontal: 25,
-    marginTop: 20,
-    backgroundColor: "#fff",
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    shadowColor: "#000",
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
-    alignItems: "center",
-  },
-  creditBannerShifted: {
-    marginTop: 150,
-  },
-  creditBannerTitle: {
-    fontSize: 14,
-    color: "#7c8095",
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  creditBannerValue: {
-    fontSize: 20,
+  heroTitle: {
+    marginTop: 18,
+    fontSize: 22,
     fontWeight: "800",
-    color: "#3e3e63",
+    color: "#fff",
+    textAlign: "right",
   },
-
-  // 🔹 תוכן
-  card: {
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    marginHorizontal: 25,
-    marginVertical: 10,
-    padding: 20,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 6,
+  heroSubtitle: {
+    marginTop: 8,
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "right",
   },
-  business: { fontSize: 20, fontWeight: "700", color: "#3e3e63" },
-  detail: { marginTop: 5, fontSize: 15, color: "#555" },
-  status: { marginTop: 8, fontWeight: "700", fontSize: 14 },
-  approved: { color: "#2ecc71" },
-  pending: { color: "#f39c12" },
-  cancelled: { color: "#e74c3c" },
-  rescheduled: { color: "#3498db" },
-  penaltyInfo: {
-    marginTop: 6,
-    color: "#b34700",
-    fontWeight: "600",
-  },
-  attendanceAlert: {
-    marginTop: 4,
-    color: "#d35400",
-    fontWeight: "600",
-  },
-  attendanceInfo: {
-    marginTop: 4,
-    color: "#2c7a7b",
-    fontWeight: "600",
-  },
-  buttonsRow: {
+  heroStatsRow: {
     flexDirection: "row-reverse",
     justifyContent: "space-between",
-    marginTop: 10,
+    marginTop: 20,
   },
-  cancelButton: {
+  heroStat: {
     flex: 1,
-    borderRadius: 25,
-    borderColor: "#e74c3c",
-    borderWidth: 1.5,
-    paddingVertical: 8,
+    marginHorizontal: 4,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 18,
+    paddingVertical: 14,
     alignItems: "center",
-    marginHorizontal: 5,
   },
-  cancelText: { color: "#e74c3c", fontWeight: "700" },
-  rescheduleButton: {
+  heroStatValue: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 20,
+  },
+  heroStatLabel: {
+    color: "rgba(255,255,255,0.7)",
+    marginTop: 4,
+    fontSize: 12,
+  },
+  segmentRow: {
+    flexDirection: "row",
+    marginTop: 24,
+    marginHorizontal: 20,
+    backgroundColor: "#e6e8f8",
+    borderRadius: 20,
+    padding: 6,
+  },
+  segmentButton: {
     flex: 1,
-    borderRadius: 25,
-    borderColor: "#3498db",
-    borderWidth: 1.5,
-    paddingVertical: 8,
+    borderRadius: 16,
+    paddingVertical: 10,
     alignItems: "center",
-    marginHorizontal: 5,
   },
-  rescheduleText: { color: "#3498db", fontWeight: "700" },
-  noBookings: {
-    textAlign: "center",
-    color: "#666",
-    marginTop: 100,
-    fontSize: 16,
+  segmentButtonActive: {
+    backgroundColor: "#fff",
+    elevation: 2,
   },
-  scrollContent: {
-    paddingBottom: 80,
+  segmentText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#6b6f91",
   },
-  scrollContentShifted: {
-    paddingTop: 100,
+  segmentTextActive: {
+    color: "#1f1b5c",
   },
-  loadingContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#f5f7fa",
+  list: {
+    marginTop: 18,
+    paddingHorizontal: 20,
+    gap: 16,
   },
-  loadingText: { marginTop: 10, fontSize: 16, color: "#3e3e63" },
-
-  // 🔹 Modal
-  modalOverlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  modalBox: {
-    width: "85%",
+  bookingCard: {
     backgroundColor: "#fff",
     borderRadius: 20,
-    padding: 20,
+    padding: 18,
     shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  modalTitle: {
+  bookingHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  bookingHeaderText: {
+    flex: 1,
+    marginRight: 12,
+  },
+  bookingBusiness: {
     fontSize: 18,
     fontWeight: "800",
-    marginBottom: 15,
-    color: "#3e3e63",
+    color: "#1f1b5c",
+    textAlign: "right",
   },
-  modalLoading: {
-    paddingVertical: 20,
-    alignItems: "center",
+  bookingTime: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#6b6f91",
+    textAlign: "right",
   },
-  modalInfo: {
-    textAlign: "center",
-    color: "#7c8095",
-    fontWeight: "600",
-    marginTop: 10,
+  statusPill: {
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
   },
-  modalSectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#3e3e63",
-    marginTop: 5,
-    marginBottom: 10,
-  },
-  modalDateScroll: {
-    flexDirection: "row-reverse",
-    paddingBottom: 6,
-    paddingHorizontal: 2,
-  },
-  modalDateBtn: {
-    width: 110,
-    borderWidth: 1,
-    borderColor: "#e0e3ef",
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: "#f9fafc",
-    alignItems: "center",
-    justifyContent: "center",
-    marginHorizontal: 5,
-  },
-  modalDateSelected: {
-    backgroundColor: "#6C63FF",
-    borderColor: "#6C63FF",
-  },
-  modalDateDisabled: {
-    backgroundColor: "#f0f1f6",
-    borderColor: "#e4e6f2",
-  },
-  modalDateWeekday: {
-    color: "#6C63FF",
+  statusText: {
     fontSize: 12,
     fontWeight: "700",
   },
-  modalDateText: {
-    color: "#3e3e63",
+  bookingImage: {
+    marginTop: 14,
+    width: "100%",
+    height: 160,
+    borderRadius: 16,
+  },
+  bookingImagePlaceholder: {
+    marginTop: 14,
+    width: "100%",
+    height: 160,
+    borderRadius: 16,
+    backgroundColor: "#f0f1f9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bookingNotes: {
+    marginTop: 14,
+    fontSize: 13,
+    color: "#4f5472",
+    textAlign: "right",
+  },
+  bookingMetaRow: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 12,
+  },
+  bookingMetaText: {
+    color: "#6C63FF",
     fontWeight: "700",
+    fontSize: 13,
+  },
+  bookingActionsRow: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    marginTop: 18,
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  actionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    gap: 6,
+  },
+  actionPrimary: {
+    backgroundColor: "#6C63FF",
+  },
+  actionDanger: {
+    backgroundColor: "#ef5350",
+  },
+  actionSecondary: {
+    backgroundColor: "#eef0ff",
+  },
+  actionPrimaryText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  actionSecondaryText: {
+    color: "#4c4f75",
+    fontWeight: "700",
+  },
+  emptyState: {
+    marginTop: 40,
+    marginHorizontal: 32,
+    borderRadius: 24,
+    backgroundColor: "#fff",
+    padding: 32,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e4e7fb",
+  },
+  emptyTitle: {
+    marginTop: 18,
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#1f1b5c",
+    textAlign: "center",
+  },
+  emptySubtitle: {
+    marginTop: 10,
+    color: "#6b6f91",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  emptyAction: {
+    marginTop: 20,
+    backgroundColor: "#6C63FF",
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  emptyActionText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingHorizontal: 22,
+    paddingTop: 24,
+    paddingBottom: 32,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#1f1b5c",
+    textAlign: "right",
+  },
+  modalSubtitle: {
+    marginTop: 6,
+    color: "#6b6f91",
+    fontSize: 13,
+    textAlign: "right",
+  },
+  modalLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 16,
+  },
+  modalLoadingText: {
+    color: "#6b6f91",
+    fontSize: 13,
+  },
+  modalSectionTitle: {
+    marginTop: 24,
+    fontWeight: "800",
+    fontSize: 15,
+    color: "#1f1b5c",
+    textAlign: "right",
+  },
+  modalDatesRow: {
+    flexDirection: "row-reverse",
+    marginTop: 16,
+    gap: 12,
+  },
+  modalDateBtn: {
+    width: 110,
+    backgroundColor: "#f1f2fb",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: "center",
+  },
+  modalDateSelected: {
+    backgroundColor: "#6C63FF",
+  },
+  modalDateDisabled: {
+    backgroundColor: "#eff0f4",
+    opacity: 0.55,
+  },
+  modalDateWeekday: {
+    fontSize: 12,
+    color: "#6C63FF",
+    fontWeight: "700",
+  },
+  modalDateText: {
     fontSize: 14,
+    fontWeight: "700",
+    color: "#1f1b5c",
   },
   modalDateSelectedText: {
     color: "#fff",
   },
   modalDateDisabledText: {
-    color: "#bcc1d6",
+    color: "#9ea3bf",
+  },
+  modalInfo: {
+    marginTop: 18,
+    textAlign: "center",
+    color: "#6b6f91",
   },
   modalHoursContainer: {
-    flexDirection: "row-reverse",
+    flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 16,
   },
   modalHourBtn: {
+    width: 92,
+    borderRadius: 14,
+    paddingVertical: 10,
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: "#d9dbe8",
-    borderRadius: 12,
+    borderColor: "#dfe3f5",
     backgroundColor: "#fff",
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    marginLeft: 8,
-    marginBottom: 10,
   },
   modalHourSelected: {
     backgroundColor: "#6C63FF",
     borderColor: "#6C63FF",
   },
   modalHourDisabled: {
-    backgroundColor: "#eef0f7",
-    borderColor: "#eef0f7",
+    opacity: 0.4,
   },
   modalHourText: {
-    color: "#3e3e63",
     fontWeight: "700",
+    color: "#1f1b5c",
   },
   modalHourSelectedText: {
     color: "#fff",
   },
   modalHourDisabledText: {
-    color: "#aab0c6",
+    color: "#8c91ad",
   },
   modalButtons: {
-    flexDirection: "row-reverse",
-    justifyContent: "space-between",
-    marginTop: 15,
+    flexDirection: "row",
+    marginTop: 26,
+    gap: 12,
   },
   modalCancel: {
     flex: 1,
-    borderWidth: 1.5,
-    borderColor: "#aaa",
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dfe3f5",
     alignItems: "center",
-    marginHorizontal: 5,
+    justifyContent: "center",
+    paddingVertical: 12,
   },
-  modalCancelText: { color: "#555", fontWeight: "600" },
+  modalCancelText: {
+    color: "#6b6f91",
+    fontWeight: "700",
+  },
   modalConfirm: {
     flex: 1,
+    borderRadius: 16,
     backgroundColor: "#6C63FF",
-    borderRadius: 10,
-    paddingVertical: 10,
     alignItems: "center",
-    marginHorizontal: 5,
+    justifyContent: "center",
+    paddingVertical: 12,
   },
-  modalConfirmText: { color: "#fff", fontWeight: "700" },
   modalConfirmDisabled: {
-    backgroundColor: "#b9b6ff",
+    opacity: 0.4,
+  },
+  modalConfirmText: {
+    color: "#fff",
+    fontWeight: "700",
   },
 });

@@ -1,6 +1,14 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import { signOut, updateEmail, updatePassword } from "firebase/auth";
+import {
+  PhoneAuthProvider,
+  reload,
+  sendEmailVerification,
+  signOut,
+  updateEmail,
+  updatePassword,
+  updatePhoneNumber,
+} from "firebase/auth";
 import {
   collection,
   doc,
@@ -10,7 +18,7 @@ import {
   setDoc,
   where,
 } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Image,
@@ -25,7 +33,8 @@ import {
     View,
 } from "react-native";
 import Animated, { FadeInUp } from "react-native-reanimated";
-import { auth, db } from "../firebaseConfig";
+import FirebaseRecaptchaVerifierModal from "../components/SafeRecaptchaModal";
+import { auth, db, firebaseAppConfig } from "../firebaseConfig";
 import InlineNotification from "../components/InlineNotification";
 import {
   avatarCatalog,
@@ -34,7 +43,7 @@ import {
   getAvatarSource,
   isValidAvatarId,
 } from "../constants/profileAvatars";
-import { formatILS } from "../utils/currency";
+import { isBookingTimeElapsed } from "../utils/bookingDate";
 import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const defaultPreferences = {
@@ -47,7 +56,7 @@ export default function Profile() {
   const [userData, setUserData] = useState({
     preferences: { ...defaultPreferences },
     avatar: defaultAvatarId,
-    cancellationCredit: 0,
+    phoneVerified: false,
   });
   const [editing, setEditing] = useState(false);
   const [passwordMode, setPasswordMode] = useState(false);
@@ -56,6 +65,14 @@ export default function Profile() {
   const [uploading, setUploading] = useState(false);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [notification, setNotification] = useState(null);
+  const [bookingMetrics, setBookingMetrics] = useState({ upcoming: 0, history: 0 });
+  const [emailVerificationLoading, setEmailVerificationLoading] = useState(false);
+  const [phoneModalVisible, setPhoneModalVisible] = useState(false);
+  const [phoneNumberInput, setPhoneNumberInput] = useState("");
+  const [verificationId, setVerificationId] = useState(null);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [phoneProcessing, setPhoneProcessing] = useState(false);
+  const recaptchaVerifier = useRef(null);
   const router = useRouter();
 
   const refreshPushNotifications = async (enabled) => {
@@ -103,22 +120,18 @@ export default function Profile() {
             const avatarId = isValidAvatarId(data.avatar)
               ? data.avatar
               : defaultAvatarId;
-            const creditValue = Number(data.cancellationCredit);
-            const cancellationCredit = Number.isFinite(creditValue)
-              ? creditValue
-              : 0;
             setUserData({
               ...data,
               avatar: avatarId,
               preferences: mergedPreferences,
-              cancellationCredit,
+              phoneVerified: Boolean(data.phoneVerified),
             });
           } else {
             setUserData({
               email: user.email,
               preferences: { ...defaultPreferences },
               avatar: defaultAvatarId,
-              cancellationCredit: 0,
+              phoneVerified: Boolean(user.phoneNumber),
             });
           }
         }
@@ -130,9 +143,52 @@ export default function Profile() {
     fetchUser();
   }, []);
 
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) {
+      setBookingMetrics({ upcoming: 0, history: 0 });
+      return;
+    }
+
+    let cancelled = false;
+    const computeMetrics = async () => {
+      try {
+        const snapshot = await getDocs(
+          query(collection(db, "appointments"), where("userId", "==", user.uid))
+        );
+        if (cancelled) {
+          return;
+        }
+        let upcoming = 0;
+        let history = 0;
+        snapshot.docs.forEach((docSnap) => {
+          const booking = docSnap.data();
+          if (booking.status !== "cancelled" && !isBookingTimeElapsed(booking)) {
+            upcoming += 1;
+          } else {
+            history += 1;
+          }
+        });
+        setBookingMetrics({ upcoming, history });
+      } catch (error) {
+        console.error("Failed to compute booking metrics:", error);
+      }
+    };
+
+    computeMetrics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notification?.id]);
+
+  useEffect(() => {
+    const fallback = auth.currentUser?.phoneNumber || "";
+    setPhoneNumberInput(userData?.phone || fallback);
+  }, [userData?.phone]);
+
   const handleSelectPresetAvatar = async (avatarId) => {
     try {
-      setUploading(true);
       const user = auth.currentUser;
       const ref = doc(db, "users", user.uid);
       setUserData((prev) => ({ ...prev, avatar: avatarId }));
@@ -211,6 +267,155 @@ export default function Profile() {
     }
   };
 
+  const handleSendEmailVerification = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      showNotification("error", "לא נמצא משתמש מחובר");
+      return;
+    }
+    try {
+      setEmailVerificationLoading(true);
+      await sendEmailVerification(user);
+      showNotification("success", "שלחנו אלייך קישור אימות למייל");
+    } catch (error) {
+      console.error("Failed to send verification email:", error);
+      showNotification(
+        "error",
+        error.message || "לא הצלחנו לשלוח מייל אימות כרגע"
+      );
+    } finally {
+      setEmailVerificationLoading(false);
+    }
+  };
+
+  const handleRefreshEmailStatus = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        return;
+      }
+      await reload(user);
+      if (user.emailVerified) {
+        showNotification("success", "האימייל שלך אומת בהצלחה");
+      } else {
+        showNotification("info", "האימייל עדיין ממתין לאימות. בדקי שוב מאוחר יותר.");
+      }
+    } catch (error) {
+      console.error("Failed to refresh email status:", error);
+      showNotification(
+        "error",
+        error.message || "לא הצלחנו לרענן את סטטוס האימייל"
+      );
+    }
+  };
+
+  const openPhoneModal = () => {
+    if (phoneProcessing) return;
+    setPhoneNumberInput(
+      userData?.phone || auth.currentUser?.phoneNumber || ""
+    );
+    setVerificationId(null);
+    setVerificationCode("");
+    setPhoneModalVisible(true);
+  };
+
+  const closePhoneModal = () => {
+    if (phoneProcessing) return;
+    setPhoneModalVisible(false);
+    setVerificationId(null);
+    setVerificationCode("");
+  };
+
+  const handleSendPhoneCode = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      showNotification("error", "לא נמצא משתמש מחובר");
+      return;
+    }
+
+    const trimmed = phoneNumberInput.trim();
+    if (!trimmed.startsWith("+")) {
+      showNotification(
+        "error",
+        "נא להזין מספר טלפון בפורמט בינלאומי (לדוגמה ‎+972...)"
+      );
+      return;
+    }
+
+    if (!recaptchaVerifier.current) {
+      showNotification(
+        "error",
+        "לא הצלחנו לאתחל את אימות ה-SMS. נסי לרענן את המסך."
+      );
+      return;
+    }
+
+    try {
+      setPhoneProcessing(true);
+      const provider = new PhoneAuthProvider(auth);
+      const verification = await provider.verifyPhoneNumber(
+        trimmed,
+        recaptchaVerifier.current
+      );
+      setVerificationId(verification);
+      showNotification("success", "שלחנו אלייך קוד אימות ב-SMS");
+    } catch (error) {
+      console.error("Failed to send phone verification code:", error);
+      showNotification(
+        "error",
+        error.message || "לא הצלחנו לשלוח קוד אימות כרגע"
+      );
+    } finally {
+      setPhoneProcessing(false);
+    }
+  };
+
+  const handleConfirmPhoneCode = async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      showNotification("error", "לא נמצא משתמש מחובר");
+      return;
+    }
+
+    if (!verificationId || verificationCode.trim().length < 6) {
+      showNotification("error", "נא להזין קוד אימות בן 6 ספרות");
+      return;
+    }
+
+    try {
+      setPhoneProcessing(true);
+      const credential = PhoneAuthProvider.credential(
+        verificationId,
+        verificationCode.trim()
+      );
+      await updatePhoneNumber(user, credential);
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          phone: phoneNumberInput.trim(),
+          phoneVerified: true,
+        },
+        { merge: true }
+      );
+      setUserData((prev) => ({
+        ...prev,
+        phone: phoneNumberInput.trim(),
+        phoneVerified: true,
+      }));
+      showNotification("success", "מספר הטלפון אומת בהצלחה");
+      closePhoneModal();
+    } catch (error) {
+      console.error("Failed to verify phone number:", error);
+      const fallbackMessage =
+        error?.code === "auth/requires-recent-login"
+          ? "יש להתחבר מחדש לפני אימות מספר הטלפון"
+          : error.message || "לא הצלחנו לאמת את מספר הטלפון";
+      showNotification("error", fallbackMessage);
+    } finally {
+      setPhoneProcessing(false);
+    }
+  };
+
   const creationTime = auth.currentUser?.metadata?.creationTime;
   const lastLoginTime = auth.currentUser?.metadata?.lastSignInTime;
 
@@ -225,30 +430,38 @@ export default function Profile() {
     });
   };
 
+  const emailVerified = Boolean(auth.currentUser?.emailVerified);
+  const phoneVerified = Boolean(userData?.phoneVerified || auth.currentUser?.phoneNumber);
+
   const insights = useMemo(
     () => [
       {
-        id: "cancellationCredit",
-        label: "יתרת דמי ביטול",
-        value: formatILS(userData?.cancellationCredit || 0),
+        id: "emailStatus",
+        label: "אימות מייל",
+        value: emailVerified ? "מאומת" : "דורש אימות",
+      },
+      {
+        id: "phoneStatus",
+        label: "אימות טלפון",
+        value: phoneVerified ? "מאומת" : "דורש אימות",
       },
       {
         id: "bookings",
         label: "תורים קרובים",
-        value: userData?.metrics?.upcoming || userData?.upcomingCount || 0,
+        value: bookingMetrics.upcoming,
+      },
+      {
+        id: "history",
+        label: "תורים שבוצעו",
+        value: bookingMetrics.history,
       },
       {
         id: "favorites",
         label: "עסקים שמורים",
         value: userData?.favoritesCount || userData?.favorites?.length || 0,
       },
-      {
-        id: "history",
-        label: "תורים שבוצעו",
-        value: userData?.metrics?.completed || userData?.completedCount || 0,
-      },
     ],
-    [userData]
+    [bookingMetrics, emailVerified, phoneVerified, userData?.favoritesCount, userData?.favorites?.length]
   );
 
   const accountDetails = useMemo(
@@ -324,6 +537,11 @@ export default function Profile() {
 
   return (
     <LinearGradient colors={["#6C63FF", "#48C6EF"]} style={{ flex: 1 }}>
+      <FirebaseRecaptchaVerifierModal
+        ref={recaptchaVerifier}
+        firebaseConfig={firebaseAppConfig}
+        attemptInvisibleVerification
+      />
       <View style={styles.notificationWrapper} pointerEvents="box-none">
         <InlineNotification
           key={notification?.id || "profileNotification"}
@@ -380,6 +598,69 @@ export default function Profile() {
             >
               <Text style={styles.modalCloseText}>סגור</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={phoneModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closePhoneModal}
+      >
+        <View style={styles.phoneModalOverlay}>
+          <View style={styles.phoneModalContent}>
+            <Text style={styles.phoneModalTitle}>אימות מספר טלפון</Text>
+            <Text style={styles.phoneModalSubtitle}>
+              הזיני מספר בינלאומי וקוד אימות שתקבלי בהודעת SMS
+            </Text>
+            <TextInput
+              style={[styles.input, styles.rtl, styles.phoneModalInput]}
+              placeholder="לדוגמה +972501234567"
+              placeholderTextColor="#777"
+              keyboardType="phone-pad"
+              value={phoneNumberInput}
+              onChangeText={setPhoneNumberInput}
+              textAlign="right"
+            />
+            {verificationId ? (
+              <TextInput
+                style={[styles.input, styles.rtl, styles.phoneModalInput]}
+                placeholder="הזיני קוד בן 6 ספרות"
+                placeholderTextColor="#777"
+                keyboardType="number-pad"
+                value={verificationCode}
+                onChangeText={setVerificationCode}
+                textAlign="center"
+                maxLength={6}
+              />
+            ) : null}
+
+            <View style={styles.phoneModalButtons}>
+              <TouchableOpacity
+                style={styles.phoneModalCancel}
+                onPress={closePhoneModal}
+                disabled={phoneProcessing}
+              >
+                <Text style={styles.phoneModalCancelText}>סגור</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.phoneModalAction,
+                  phoneProcessing && styles.phoneModalActionDisabled,
+                ]}
+                onPress={verificationId ? handleConfirmPhoneCode : handleSendPhoneCode}
+                disabled={phoneProcessing}
+                activeOpacity={0.85}
+              >
+                {phoneProcessing ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.phoneModalActionText}>
+                    {verificationId ? "אשר קוד" : "שלח קוד"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -486,6 +767,78 @@ export default function Profile() {
                 trackColor={{ false: "#d1d5db", true: "#bfc6ff" }}
                 thumbColor={preferences.calendarSync ? "#6C63FF" : "#f4f3f4"}
               />
+            </View>
+          </View>
+
+          <View style={styles.securityBox}>
+            <Text style={styles.securityTitle}>אבטחת חשבון</Text>
+
+            <View style={styles.securityRow}>
+              <View style={styles.securityTextWrap}>
+                <Text style={styles.securityLabel}>אימות כתובת מייל</Text>
+                <Text style={styles.securityDesc}>
+                  ודאי שרק את מקבלת גישה לחשבון באמצעות אימות דוא&quot;ל
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.securityAction,
+                  emailVerified && styles.securityActionSuccess,
+                ]}
+                onPress={emailVerified ? handleRefreshEmailStatus : handleSendEmailVerification}
+                disabled={emailVerificationLoading}
+                activeOpacity={0.85}
+              >
+                {emailVerificationLoading ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={emailVerified ? "#0f5132" : "#fff"}
+                  />
+                ) : (
+                  <Text
+                    style={[
+                      styles.securityActionText,
+                      emailVerified && styles.securityActionSuccessText,
+                    ]}
+                  >
+                    {emailVerified ? "מאומת" : "שליחת אימות"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.securityRow}>
+              <View style={styles.securityTextWrap}>
+                <Text style={styles.securityLabel}>אימות מספר טלפון</Text>
+                <Text style={styles.securityDesc}>
+                  קבלי קודי כניסה והתרעות SMS להגנה מקסימלית על החשבון
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.securityAction,
+                  phoneVerified && styles.securityActionSuccess,
+                ]}
+                onPress={openPhoneModal}
+                disabled={phoneProcessing}
+                activeOpacity={0.85}
+              >
+                {phoneProcessing ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={phoneVerified ? "#0f5132" : "#fff"}
+                  />
+                ) : (
+                  <Text
+                    style={[
+                      styles.securityActionText,
+                      phoneVerified && styles.securityActionSuccessText,
+                    ]}
+                  >
+                    {phoneVerified ? "נהל" : "אמת מספר"}
+                  </Text>
+                )}
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -746,6 +1099,63 @@ const styles = StyleSheet.create({
   preferenceSwitch: {
     marginLeft: 16,
   },
+  securityBox: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#e6e9ff",
+    marginBottom: 18,
+  },
+  securityTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#3e3e63",
+    textAlign: "right",
+  },
+  securityRow: {
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  securityTextWrap: {
+    flex: 1,
+    alignItems: "flex-end",
+    paddingLeft: 12,
+  },
+  securityLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#3e3e63",
+  },
+  securityDesc: {
+    fontSize: 12,
+    color: "#7a7f9a",
+    marginTop: 4,
+    textAlign: "right",
+  },
+  securityAction: {
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: "#6C63FF",
+    minWidth: 120,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  securityActionText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  securityActionSuccess: {
+    backgroundColor: "#e4f5ec",
+    borderColor: "#b0e5c7",
+    borderWidth: 1,
+  },
+  securityActionSuccessText: {
+    color: "#0f5132",
+  },
   card: {
     flexDirection: "row-reverse",
     alignItems: "center",
@@ -840,6 +1250,68 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "700",
     fontSize: 15,
+  },
+  phoneModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "flex-end",
+  },
+  phoneModalContent: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 22,
+    paddingTop: 26,
+    paddingBottom: 32,
+  },
+  phoneModalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#1f1b5c",
+    textAlign: "right",
+  },
+  phoneModalSubtitle: {
+    marginTop: 6,
+    color: "#6b6f91",
+    fontSize: 13,
+    textAlign: "right",
+  },
+  phoneModalInput: {
+    marginTop: 16,
+    borderColor: "#dfe3f5",
+  },
+  phoneModalButtons: {
+    flexDirection: "row",
+    marginTop: 24,
+    gap: 12,
+  },
+  phoneModalCancel: {
+    flex: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#dfe3f5",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+  },
+  phoneModalCancelText: {
+    color: "#6b6f91",
+    fontWeight: "700",
+  },
+  phoneModalAction: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: "#6C63FF",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+  },
+  phoneModalActionDisabled: {
+    opacity: 0.5,
+  },
+  phoneModalActionText: {
+    color: "#fff",
+    fontWeight: "700",
   },
   editBox: {
     backgroundColor: "#f9f9f9",
