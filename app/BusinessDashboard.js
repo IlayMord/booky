@@ -5,7 +5,10 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   query,
+  serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -28,6 +31,11 @@ import {
   getDisplayWeeklyHoursRows,
   sanitizeWeeklyHours,
 } from "../constants/weekdays";
+import {
+  CANCELLATION_FEE_AMOUNT,
+  getCancellationFeeReasonLabel,
+} from "../constants/fees";
+import { formatILS } from "../utils/currency";
 
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
@@ -110,6 +118,99 @@ export default function BusinessDashboard() {
       );
     } catch {
       Alert.alert("שגיאה", "לא ניתן לעדכן סטטוס.");
+    }
+  };
+
+  const handleAttendanceResponse = async (booking, attended) => {
+    if (!booking?.id) {
+      return;
+    }
+
+    const appointmentRef = doc(db, "appointments", booking.id);
+    const updates = {
+      attendanceStatus: attended ? "arrived" : "no_show",
+      attendanceUpdatedAt: serverTimestamp(),
+    };
+
+    let creditDelta = 0;
+    let penaltyUpdate = null;
+
+    if (attended) {
+      if (booking?.penalty?.applied && booking.penalty.reason === "no_show") {
+        penaltyUpdate = {
+          applied: false,
+          amount: 0,
+          reason: null,
+          appliedAt: serverTimestamp(),
+        };
+        creditDelta = -Math.abs(booking.penalty.amount || CANCELLATION_FEE_AMOUNT);
+      }
+    } else {
+      const alreadyNoShow =
+        booking?.penalty?.applied && booking.penalty.reason === "no_show";
+      if (!alreadyNoShow) {
+        penaltyUpdate = {
+          applied: true,
+          amount: CANCELLATION_FEE_AMOUNT,
+          reason: "no_show",
+          appliedAt: serverTimestamp(),
+        };
+        creditDelta = CANCELLATION_FEE_AMOUNT;
+      }
+    }
+
+    if (penaltyUpdate) {
+      updates.penalty = penaltyUpdate;
+    }
+
+    try {
+      await updateDoc(appointmentRef, updates);
+
+      if (creditDelta !== 0 && booking.userId) {
+        await setDoc(
+          doc(db, "users", booking.userId),
+          {
+            cancellationCredit: increment(creditDelta),
+          },
+          { merge: true }
+        );
+      }
+
+      setBookings((prev) =>
+        prev.map((b) => {
+          if (b.id !== booking.id) return b;
+          const next = {
+            ...b,
+            ...updates,
+          };
+          if (penaltyUpdate) {
+            next.penalty = penaltyUpdate;
+          }
+          return next;
+        })
+      );
+
+      if (creditDelta > 0) {
+        Alert.alert(
+          "עודכן",
+          `הלקוח סומן כלא הגיע ונוספו דמי ביטול של ${formatILS(creditDelta)}.`
+        );
+      } else if (creditDelta < 0) {
+        Alert.alert(
+          "עודכן",
+          "סימון אי ההגעה הוסר והחיוב עבור דמי הביטול הוחזר."
+        );
+      } else {
+        Alert.alert(
+          "עודכן",
+          attended
+            ? "הלקוח סומן כמי שהגיע לתור."
+            : "הלקוח סומן כמי שלא הגיע לתור."
+        );
+      }
+    } catch (error) {
+      console.error("שגיאה בעדכון סטטוס הגעה:", error);
+      Alert.alert("שגיאה", "לא ניתן לעדכן את הסטטוס כרגע.");
     }
   };
 
@@ -358,6 +459,59 @@ export default function BusinessDashboard() {
                   <Text style={styles.bookingDetail}>📞 {b.userPhone || "-"}</Text>
                   <Text style={styles.bookingDetail}>סטטוס: {b.status}</Text>
 
+                  {b.penalty?.applied && (
+                    <Text style={styles.penaltyBadge}>
+                      💳 דמי ביטול {formatILS(b.penalty?.amount || CANCELLATION_FEE_AMOUNT)}
+                      {b.penalty?.reason
+                        ? ` · ${getCancellationFeeReasonLabel(b.penalty.reason)}`
+                        : ""}
+                    </Text>
+                  )}
+
+                  {b.status !== "cancelled" && (
+                    <View style={styles.attendanceContainer}>
+                      <Text style={styles.attendanceLabel}>הלקוח הגיע?</Text>
+                      <View style={styles.attendanceButtons}>
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            b.attendanceStatus === "arrived" &&
+                              styles.attendanceButtonActive,
+                          ]}
+                          onPress={() => handleAttendanceResponse(b, true)}
+                        >
+                          <Text
+                            style={[
+                              styles.attendanceButtonText,
+                              b.attendanceStatus === "arrived" &&
+                                styles.attendanceButtonTextActive,
+                            ]}
+                          >
+                            הגיע
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            styles.attendanceButtonOutlineDanger,
+                            b.attendanceStatus === "no_show" &&
+                              styles.attendanceButtonActiveDanger,
+                          ]}
+                          onPress={() => handleAttendanceResponse(b, false)}
+                        >
+                          <Text
+                            style={[
+                              styles.attendanceButtonText,
+                              styles.attendanceButtonTextDanger,
+                            ]}
+                          >
+                            לא הגיע
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
                   {b.status === "pending" && (
                     <View style={styles.row}>
                       <TouchableOpacity
@@ -528,6 +682,55 @@ const styles = StyleSheet.create({
   },
   bookingTime: { fontWeight: "700", fontSize: 16, textAlign: "right" },
   bookingDetail: { fontSize: 14, textAlign: "right", color: "#555" },
+  penaltyBadge: {
+    marginTop: 6,
+    textAlign: "right",
+    color: "#b34700",
+    fontWeight: "600",
+  },
+  attendanceContainer: {
+    marginTop: 12,
+  },
+  attendanceLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "right",
+    color: "#3e3e63",
+    marginBottom: 6,
+  },
+  attendanceButtons: {
+    flexDirection: "row-reverse",
+    justifyContent: "flex-start",
+    alignItems: "center",
+  },
+  attendanceButton: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#6C63FF",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    marginHorizontal: 5,
+  },
+  attendanceButtonActive: {
+    backgroundColor: "#6C63FF",
+  },
+  attendanceButtonOutlineDanger: {
+    borderColor: "#F44336",
+  },
+  attendanceButtonActiveDanger: {
+    backgroundColor: "rgba(244,67,54,0.12)",
+  },
+  attendanceButtonText: {
+    color: "#6C63FF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  attendanceButtonTextActive: {
+    color: "#fff",
+  },
+  attendanceButtonTextDanger: {
+    color: "#F44336",
+  },
   row: { flexDirection: "row-reverse", marginTop: 8 },
   actionBtn: {
     flex: 1,

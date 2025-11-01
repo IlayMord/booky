@@ -90,3 +90,14 @@ export const isBookingTimeElapsed = (booking, reference = Date.now()) => {
 };
 
 export const formatTimeForDisplay = normaliseBookingTime;
+
+export const getHoursUntilBooking = (booking, reference = Date.now()) => {
+  const date = resolveBookingDateTime(booking);
+  if (!date) return null;
+  const referenceTime =
+    reference instanceof Date ? reference.getTime() : Number(reference);
+  if (!Number.isFinite(referenceTime)) {
+    return (date.getTime() - Date.now()) / (1000 * 60 * 60);
+  }
+  return (date.getTime() - referenceTime) / (1000 * 60 * 60);
+};

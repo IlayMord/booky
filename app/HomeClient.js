@@ -142,12 +142,6 @@ export default function HomeClient() {
               notificationsError
             );
           }
-          if (isMounted) {
-            const avatarId = isValidAvatarId(data?.avatar)
-              ? data.avatar
-              : defaultAvatarId;
-            setUserAvatar(avatarId);
-          }
         } catch (error) {
           console.error("❌ שגיאה בשליפת משתמש:", error);
           if (isMounted) {

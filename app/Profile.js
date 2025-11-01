@@ -34,6 +34,7 @@ import {
   getAvatarSource,
   isValidAvatarId,
 } from "../constants/profileAvatars";
+import { formatILS } from "../utils/currency";
 import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const defaultPreferences = {
@@ -46,6 +47,7 @@ export default function Profile() {
   const [userData, setUserData] = useState({
     preferences: { ...defaultPreferences },
     avatar: defaultAvatarId,
+    cancellationCredit: 0,
   });
   const [editing, setEditing] = useState(false);
   const [passwordMode, setPasswordMode] = useState(false);
@@ -101,16 +103,22 @@ export default function Profile() {
             const avatarId = isValidAvatarId(data.avatar)
               ? data.avatar
               : defaultAvatarId;
+            const creditValue = Number(data.cancellationCredit);
+            const cancellationCredit = Number.isFinite(creditValue)
+              ? creditValue
+              : 0;
             setUserData({
               ...data,
               avatar: avatarId,
               preferences: mergedPreferences,
+              cancellationCredit,
             });
           } else {
             setUserData({
               email: user.email,
               preferences: { ...defaultPreferences },
               avatar: defaultAvatarId,
+              cancellationCredit: 0,
             });
           }
         }
@@ -219,6 +227,11 @@ export default function Profile() {
 
   const insights = useMemo(
     () => [
+      {
+        id: "cancellationCredit",
+        label: "יתרת דמי ביטול",
+        value: formatILS(userData?.cancellationCredit || 0),
+      },
       {
         id: "bookings",
         label: "תורים קרובים",

@@ -2,13 +2,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import {
-    collection,
-    doc,
-    getDoc,
-    getDocs,
-    query,
-    updateDoc,
-    where,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  increment,
+  query,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -20,13 +23,20 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import InlineNotification from "../components/InlineNotification";
+import {
+  CANCELLATION_FEE_AMOUNT,
+  CANCELLATION_FEE_WINDOW_HOURS,
+  getCancellationFeeReasonLabel,
+} from "../constants/fees";
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
-import InlineNotification from "../components/InlineNotification";
+import { formatILS } from "../utils/currency";
 import {
   formatBookingDateForDisplay,
   formatDateKey,
   formatDateLabel,
+  getHoursUntilBooking,
   isBookingTimeElapsed,
   normaliseBookingDate,
   normaliseBookingTime,
@@ -111,10 +121,19 @@ export default function MyBookings() {
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleBookedTimes, setRescheduleBookedTimes] = useState(new Set());
   const [notification, setNotification] = useState(null);
+  const [cancellationCredit, setCancellationCredit] = useState(0);
   const router = useRouter();
 
   const showNotification = (type, message) => {
     setNotification({ type, message, id: Date.now() });
+  };
+
+  const shouldApplyLateCancellationFee = (booking) => {
+    const hoursUntil = getHoursUntilBooking(booking);
+    if (hoursUntil === null) {
+      return false;
+    }
+    return hoursUntil <= CANCELLATION_FEE_WINDOW_HOURS;
   };
 
   const fetchBookings = async () => {
@@ -122,6 +141,7 @@ export default function MyBookings() {
       const user = auth.currentUser;
       if (!user) {
         setBookings([]);
+        setCancellationCredit(0);
         await syncAppointmentNotifications([], { enabled: false });
         return;
       }
@@ -136,15 +156,24 @@ export default function MyBookings() {
 
       let pushEnabled = true;
       try {
-        const userDoc = await getDoc(doc(db, "users", user.uid));
+        const userRef = doc(db, "users", user.uid);
+        const userDoc = await getDoc(userRef);
         if (userDoc.exists()) {
-          const preferences = userDoc.data()?.preferences || {};
+          const data = userDoc.data() || {};
+          const preferences = data.preferences || {};
           if (typeof preferences.pushNotifications === "boolean") {
             pushEnabled = preferences.pushNotifications;
           }
+          const creditValue = Number(data.cancellationCredit);
+          setCancellationCredit(
+            Number.isFinite(creditValue) ? creditValue : 0
+          );
+        } else {
+          setCancellationCredit(0);
         }
       } catch (preferencesError) {
         console.error("Error fetching user preferences:", preferencesError);
+        setCancellationCredit(0);
       }
 
       try {
@@ -351,10 +380,81 @@ export default function MyBookings() {
     setRescheduleBookedTimes(new Set());
   };
 
-  const handleCancel = async (id) => {
+  const handleCancel = async (booking) => {
+    if (!booking?.id) {
+      return;
+    }
+
+    const user = auth.currentUser;
+    const appointmentRef = doc(db, "appointments", booking.id);
+    const applyFee = shouldApplyLateCancellationFee(booking);
+    const hasExistingPenalty = Boolean(booking?.penalty?.applied);
+    const penaltyAlreadyApplied =
+      hasExistingPenalty && booking?.penalty?.reason === "late_cancellation";
+
+    const baseTimestamp = serverTimestamp();
+    const updates = {
+      status: "cancelled",
+      cancelledAt: baseTimestamp,
+      cancelledBy: user?.uid || null,
+    };
+
+    let creditDelta = 0;
+
+    if (applyFee && !hasExistingPenalty) {
+      updates.penalty = {
+        applied: true,
+        amount: CANCELLATION_FEE_AMOUNT,
+        reason: "late_cancellation",
+        appliedAt: serverTimestamp(),
+      };
+      creditDelta = CANCELLATION_FEE_AMOUNT;
+    }
+
     try {
-      await updateDoc(doc(db, "appointments", id), { status: "cancelled" });
-      showNotification("success", "התור בוטל בהצלחה");
+      await updateDoc(appointmentRef, updates);
+
+      if (creditDelta !== 0 && booking.userId) {
+        await setDoc(
+          doc(db, "users", booking.userId),
+          {
+            cancellationCredit: increment(creditDelta),
+          },
+          { merge: true }
+        );
+        setCancellationCredit((prev) => prev + creditDelta);
+      }
+
+      if (penaltyAlreadyApplied && applyFee) {
+        showNotification(
+          "info",
+          "התור בוטל ודמי הביטול כבר חושבו עבורך בעבר."
+        );
+      } else if (creditDelta > 0) {
+        showNotification(
+          "warning",
+          `התור בוטל. שימי לב שחויבת בדמי ביטול של ${formatILS(
+            CANCELLATION_FEE_AMOUNT
+          )}.`
+        );
+      } else {
+        showNotification("success", "התור בוטל בהצלחה");
+      }
+
+      setBookings((prev) =>
+        prev.map((item) => {
+          if (item.id !== booking.id) return item;
+          const next = {
+            ...item,
+            status: "cancelled",
+          };
+          if (updates.penalty) {
+            next.penalty = updates.penalty;
+          }
+          return next;
+        })
+      );
+
       fetchBookings();
     } catch (error) {
       showNotification("error", error.message || "לא הצלחנו לבטל את התור");
@@ -442,6 +542,18 @@ export default function MyBookings() {
         <Text style={styles.headerTitle}>התורים שלי</Text>
       </View>
 
+      <View
+        style={[
+          styles.creditBanner,
+          notification?.message && styles.creditBannerShifted,
+        ]}
+      >
+        <Text style={styles.creditBannerTitle}>יתרת דמי ביטול</Text>
+        <Text style={styles.creditBannerValue}>
+          {formatILS(cancellationCredit)}
+        </Text>
+      </View>
+
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
@@ -484,11 +596,32 @@ export default function MyBookings() {
                     : "ממתין לאישור"}
                 </Text>
 
+                {b.penalty?.applied && (
+                  <Text style={[styles.penaltyInfo, styles.rtl]}>
+                    💳 דמי ביטול: {formatILS(b.penalty?.amount || CANCELLATION_FEE_AMOUNT)}
+                    {b.penalty?.reason
+                      ? ` · ${getCancellationFeeReasonLabel(b.penalty.reason)}`
+                      : ""}
+                  </Text>
+                )}
+
+                {b.attendanceStatus === "no_show" && (
+                  <Text style={[styles.attendanceAlert, styles.rtl]}>
+                    העסק דיווח שלא הגעת לתור.
+                  </Text>
+                )}
+
+                {b.attendanceStatus === "arrived" && (
+                  <Text style={[styles.attendanceInfo, styles.rtl]}>
+                    העסק אישר שהגעת לתור.
+                  </Text>
+                )}
+
                 {b.status !== "cancelled" && (
                   <View style={styles.buttonsRow}>
                     <TouchableOpacity
                       style={styles.cancelButton}
-                      onPress={() => handleCancel(b.id)}
+                      onPress={() => handleCancel(b)}
                     >
                       <Text style={styles.cancelText}>בטל תור</Text>
                     </TouchableOpacity>
@@ -686,6 +819,34 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 22, fontWeight: "900", color: "#3e3e63" },
 
+  creditBanner: {
+    marginHorizontal: 25,
+    marginTop: 20,
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+    alignItems: "center",
+  },
+  creditBannerShifted: {
+    marginTop: 150,
+  },
+  creditBannerTitle: {
+    fontSize: 14,
+    color: "#7c8095",
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  creditBannerValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#3e3e63",
+  },
+
   // 🔹 תוכן
   card: {
     backgroundColor: "#fff",
@@ -705,6 +866,21 @@ const styles = StyleSheet.create({
   pending: { color: "#f39c12" },
   cancelled: { color: "#e74c3c" },
   rescheduled: { color: "#3498db" },
+  penaltyInfo: {
+    marginTop: 6,
+    color: "#b34700",
+    fontWeight: "600",
+  },
+  attendanceAlert: {
+    marginTop: 4,
+    color: "#d35400",
+    fontWeight: "600",
+  },
+  attendanceInfo: {
+    marginTop: 4,
+    color: "#2c7a7b",
+    fontWeight: "600",
+  },
   buttonsRow: {
     flexDirection: "row-reverse",
     justifyContent: "space-between",

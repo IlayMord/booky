@@ -1,5 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import {
   formatBookingDateForDisplay,
@@ -7,18 +6,38 @@ import {
   resolveBookingDateTime,
 } from "./bookingDate";
 
+let NotificationsModule;
+try {
+  // Dynamic require so the bundle can load even if expo-notifications is not installed.
+  // eslint-disable-next-line global-require
+  NotificationsModule = require("expo-notifications");
+} catch (error) {
+  console.warn(
+    "expo-notifications module is not available; push reminders will be disabled.",
+    error
+  );
+}
+
+const Notifications = NotificationsModule;
+
 const STORAGE_KEY = "@booky_appointment_notifications";
 const ANDROID_CHANNEL_ID = "booky-reminders";
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-  }),
-});
+if (Notifications?.setNotificationHandler) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 const ensureAndroidChannelAsync = async () => {
+  if (!Notifications?.getNotificationChannelAsync) {
+    return;
+  }
+
   if (Platform.OS !== "android") {
     return;
   }
@@ -38,6 +57,10 @@ const ensureAndroidChannelAsync = async () => {
 };
 
 const ensurePushPermissionsAsync = async () => {
+  if (!Notifications?.getPermissionsAsync || !Notifications?.requestPermissionsAsync) {
+    return false;
+  }
+
   const settings = await Notifications.getPermissionsAsync();
   let finalStatus = settings.status;
 
@@ -77,11 +100,19 @@ const persistStoredNotificationsAsync = async (mapping) => {
 };
 
 const cancelNotificationIdsAsync = async (ids = []) => {
+  if (!Notifications?.cancelScheduledNotificationAsync) {
+    return;
+  }
+
   const tasks = ids.map((id) => Notifications.cancelScheduledNotificationAsync(id));
   await Promise.allSettled(tasks);
 };
 
 const scheduleReminderAsync = async (booking, triggerDate, reminderType) => {
+  if (!Notifications?.scheduleNotificationAsync) {
+    return null;
+  }
+
   const displayDate = formatBookingDateForDisplay(booking.date);
   const displayTime = normaliseBookingTime(booking.time) || "";
   const timeSegment = displayTime ? ` בשעה ${displayTime}` : "";
@@ -122,6 +153,13 @@ export const syncAppointmentNotifications = async (
   { enabled = true } = {}
 ) => {
   const stored = await readStoredNotificationsAsync();
+
+  if (!Notifications) {
+    if (Object.values(stored).flat().length) {
+      await persistStoredNotificationsAsync({});
+    }
+    return;
+  }
 
   if (!enabled) {
     const allIds = Object.values(stored).flat();
@@ -188,13 +226,17 @@ export const syncAppointmentNotifications = async (
     const dayBefore = new Date(appointmentDate.getTime() - 24 * 60 * 60 * 1000);
     if (dayBefore.getTime() > now) {
       const id = await scheduleReminderAsync(booking, dayBefore, "dayBefore");
-      reminderIds.push(id);
+      if (id) {
+        reminderIds.push(id);
+      }
     }
 
     const hourBefore = new Date(appointmentDate.getTime() - 60 * 60 * 1000);
     if (hourBefore.getTime() > now) {
       const id = await scheduleReminderAsync(booking, hourBefore, "hourBefore");
-      reminderIds.push(id);
+      if (id) {
+        reminderIds.push(id);
+      }
     }
 
     if (reminderIds.length) {
