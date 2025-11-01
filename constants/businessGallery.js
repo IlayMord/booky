@@ -1,0 +1,1 @@
+export const BUSINESS_GALLERY_IMAGE_LIMIT = 12;
