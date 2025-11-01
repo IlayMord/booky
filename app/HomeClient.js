@@ -2,8 +2,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -22,6 +22,7 @@ import {
   getAvatarSource,
   isValidAvatarId,
 } from "../constants/profileAvatars";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const screenWidth = Dimensions.get("window").width;
 
@@ -97,16 +98,49 @@ export default function HomeClient() {
         try {
           const ref = doc(db, "users", user.uid);
           const snap = await getDoc(ref);
+          let pushEnabled = true;
           if (!snap.exists()) {
             if (isMounted) {
               setUserAvatar(defaultAvatarId);
             }
-            return;
+          } else {
+            const data = snap.data();
+            const profileName = hydrateUserName(user, data);
+            if (profileName && isMounted) {
+              setUserName(profileName);
+            }
+            if (isMounted) {
+              const avatarId = isValidAvatarId(data?.avatar)
+                ? data.avatar
+                : defaultAvatarId;
+              setUserAvatar(avatarId);
+            }
+            if (typeof data?.preferences?.pushNotifications === "boolean") {
+              pushEnabled = data.preferences.pushNotifications;
+            }
           }
-          const data = snap.data();
-          const profileName = hydrateUserName(user, data);
-          if (profileName && isMounted) {
-            setUserName(profileName);
+
+          try {
+            if (pushEnabled) {
+              const appointmentsSnapshot = await getDocs(
+                query(
+                  collection(db, "appointments"),
+                  where("userId", "==", user.uid)
+                )
+              );
+              const appointments = appointmentsSnapshot.docs.map((docSnap) => ({
+                id: docSnap.id,
+                ...docSnap.data(),
+              }));
+              await syncAppointmentNotifications(appointments, { enabled: true });
+            } else {
+              await syncAppointmentNotifications([], { enabled: false });
+            }
+          } catch (notificationsError) {
+            console.error(
+              "❌ שגיאה בסנכרון התראות לתורים:",
+              notificationsError
+            );
           }
           if (isMounted) {
             const avatarId = isValidAvatarId(data?.avatar)

@@ -23,6 +23,15 @@ import {
 import { WEEK_DAYS, getWeekdayKeyFromDate } from "../constants/weekdays";
 import { auth, db } from "../firebaseConfig";
 import InlineNotification from "../components/InlineNotification";
+import {
+  formatBookingDateForDisplay,
+  formatDateKey,
+  formatDateLabel,
+  isBookingTimeElapsed,
+  normaliseBookingDate,
+  normaliseBookingTime,
+} from "../utils/bookingDate";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const clampBookingWindow = (value) => {
   const parsed = Number(value);
@@ -91,81 +100,6 @@ const resolveOperatingWindowForDay = (business, dayKey) => {
   return { opening, closing };
 };
 
-const formatDateKey = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${year}-${month}-${day}`;
-};
-
-const formatDateLabel = (date) => {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${day}.${month}.${year}`;
-};
-
-const parseDateKey = (value) => {
-  if (typeof value !== "string") return null;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
-};
-
-const normaliseBookingDate = (value) => {
-  if (!value) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return value;
-  }
-
-  const cleaned = String(value).replace(/[\.]/g, "/");
-  const parts = cleaned.split("/");
-  if (parts.length === 3) {
-    const [day, month, yearPart] = parts.map((part) => part.trim());
-    if (day && month && yearPart) {
-      const year = yearPart.length === 2 ? `20${yearPart}` : yearPart;
-      return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    }
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return formatDateKey(parsed);
-  }
-
-  return "";
-};
-
-const normaliseBookingTime = (value) => {
-  if (!value) return "";
-  const match = String(value).match(/(\d{2}:\d{2})/);
-  return match ? match[1] : "";
-};
-
-const formatBookingDateForDisplay = (value) => {
-  const normalised = normaliseBookingDate(value);
-  if (!normalised) return value;
-  const date = parseDateKey(normalised);
-  return date ? formatDateLabel(date) : value;
-};
-
-const isBookingTimeElapsed = (booking) => {
-  const dateKey = normaliseBookingDate(booking?.date);
-  const timeKey = normaliseBookingTime(booking?.time);
-  if (!dateKey || !timeKey) return false;
-  const [year, month, day] = dateKey.split("-").map(Number);
-  const [hours, minutes] = timeKey.split(":").map(Number);
-  const bookingDate = new Date(year, month - 1, day, hours, minutes);
-  return bookingDate.getTime() <= Date.now();
-};
-
 export default function MyBookings() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -186,14 +120,41 @@ export default function MyBookings() {
   const fetchBookings = async () => {
     try {
       const user = auth.currentUser;
-      if (!user) return;
-      const q = query(
+      if (!user) {
+        setBookings([]);
+        await syncAppointmentNotifications([], { enabled: false });
+        return;
+      }
+
+      const appointmentsQuery = query(
         collection(db, "appointments"),
         where("userId", "==", user.uid)
       );
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(appointmentsQuery);
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       setBookings(data);
+
+      let pushEnabled = true;
+      try {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if (userDoc.exists()) {
+          const preferences = userDoc.data()?.preferences || {};
+          if (typeof preferences.pushNotifications === "boolean") {
+            pushEnabled = preferences.pushNotifications;
+          }
+        }
+      } catch (preferencesError) {
+        console.error("Error fetching user preferences:", preferencesError);
+      }
+
+      try {
+        await syncAppointmentNotifications(data, { enabled: pushEnabled });
+      } catch (notificationError) {
+        console.error(
+          "Error syncing appointment notifications:",
+          notificationError
+        );
+      }
     } catch (error) {
       console.error("Error fetching bookings:", error);
     } finally {

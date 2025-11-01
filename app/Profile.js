@@ -1,7 +1,15 @@
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { signOut, updateEmail, updatePassword } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
@@ -26,6 +34,7 @@ import {
   getAvatarSource,
   isValidAvatarId,
 } from "../constants/profileAvatars";
+import { syncAppointmentNotifications } from "../utils/pushNotifications";
 
 const defaultPreferences = {
   pushNotifications: true,
@@ -46,6 +55,31 @@ export default function Profile() {
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
   const [notification, setNotification] = useState(null);
   const router = useRouter();
+
+  const refreshPushNotifications = async (enabled) => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      if (!enabled) {
+        await syncAppointmentNotifications([], { enabled: false });
+        return;
+      }
+
+      const appointmentsSnapshot = await getDocs(
+        query(collection(db, "appointments"), where("userId", "==", user.uid))
+      );
+
+      const appointments = appointmentsSnapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+
+      await syncAppointmentNotifications(appointments, { enabled: true });
+    } catch (error) {
+      console.error("Failed to sync push notifications:", error);
+    }
+  };
 
   const showNotification = (type, message) => {
     setNotification({ type, message, id: Date.now() });
@@ -146,6 +180,9 @@ export default function Profile() {
         },
         { merge: true }
       );
+      if (key === "pushNotifications") {
+        await refreshPushNotifications(updatedPreferences[key]);
+      }
       const label =
         key === "pushNotifications"
           ? "התראות דחיפה"
@@ -255,6 +292,11 @@ export default function Profile() {
   };
 
   const handleLogout = async () => {
+    try {
+      await syncAppointmentNotifications([], { enabled: false });
+    } catch (error) {
+      console.error("Failed to clear notifications on logout:", error);
+    }
     await signOut(auth);
     router.replace("/Login");
   };
