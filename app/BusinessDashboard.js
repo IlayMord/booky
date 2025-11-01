@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   query,
   serverTimestamp,
   updateDoc,
@@ -31,6 +32,11 @@ import {
   getDisplayWeeklyHoursRows,
   sanitizeWeeklyHours,
 } from "../constants/weekdays";
+import {
+  CANCELLATION_FEE_AMOUNT,
+  getCancellationFeeReasonLabel,
+} from "../constants/fees";
+import { formatILS } from "../utils/currency";
 
 const MAX_GALLERY_IMAGES = 12;
 

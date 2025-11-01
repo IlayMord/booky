@@ -169,6 +169,8 @@ export default function MyBookings() {
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [rescheduleBookedTimes, setRescheduleBookedTimes] = useState(new Set());
+  const [notification, setNotification] = useState(null);
+  const [cancellationCredit, setCancellationCredit] = useState(0);
   const router = useRouter();
 
   const showNotification = (type, message) => {
