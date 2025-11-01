@@ -42,6 +42,8 @@ const MAX_GALLERY_IMAGES = 12;
 
 const MAX_GALLERY_IMAGES = 12;
 
+const BUSINESS_GALLERY_LIMIT = 12;
+
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 30;
@@ -156,7 +158,7 @@ export default function BusinessDashboard() {
 
     const allowedSlots = Math.max(
       0,
-      MAX_GALLERY_IMAGES - (business.galleryImages?.length || 0)
+      BUSINESS_GALLERY_LIMIT - (business.galleryImages?.length || 0)
     );
     if (allowedSlots === 0) {
       Alert.alert("מגבלת גלריה", "ניתן לשמור עד 12 תמונות בגלריה.");
@@ -204,7 +206,7 @@ export default function BusinessDashboard() {
       const updatedGallery = [
         ...(business.galleryImages || []),
         ...newItems,
-      ].slice(0, MAX_GALLERY_IMAGES);
+      ].slice(0, BUSINESS_GALLERY_LIMIT);
 
       await updateDoc(doc(db, "businesses", business.id), {
         galleryImages: updatedGallery,
