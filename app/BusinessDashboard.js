@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import {
   collection,
@@ -6,6 +7,7 @@ import {
   getDoc,
   getDocs,
   query,
+  serverTimestamp,
   updateDoc,
   where,
 } from "firebase/firestore";
@@ -14,6 +16,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -29,6 +32,8 @@ import {
   sanitizeWeeklyHours,
 } from "../constants/weekdays";
 
+const BUSINESS_GALLERY_LIMIT = 12;
+
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 30;
@@ -43,6 +48,8 @@ export default function BusinessDashboard() {
     new Date().toISOString().split("T")[0]
   );
   const [loading, setLoading] = useState(true);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [mediaPermissionStatus, setMediaPermissionStatus] = useState(null);
   const [sectionPositions, setSectionPositions] = useState({});
   const scrollRef = useRef(null);
   const router = useRouter();
@@ -88,6 +95,24 @@ export default function BusinessDashboard() {
     fetchBusinessData();
   }, [router]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const requestPermission = async () => {
+      try {
+        const response = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!cancelled) {
+          setMediaPermissionStatus(response.status);
+        }
+      } catch (error) {
+        console.warn("Media permission request failed", error);
+      }
+    };
+    requestPermission();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const fetchBookings = async (businessId) => {
     try {
       const q = query(
@@ -102,6 +127,134 @@ export default function BusinessDashboard() {
     }
   };
 
+  const ensureMediaPermissions = async () => {
+    if (mediaPermissionStatus === "granted") {
+      return true;
+    }
+    try {
+      const response = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      setMediaPermissionStatus(response.status);
+      return response.status === "granted";
+    } catch (error) {
+      console.error("Media permission request failed", error);
+      return false;
+    }
+  };
+
+  const handleAddGalleryImages = async () => {
+    if (!business?.id) {
+      return;
+    }
+
+    const allowedSlots = Math.max(
+      0,
+      BUSINESS_GALLERY_LIMIT - (business.galleryImages?.length || 0)
+    );
+    if (allowedSlots === 0) {
+      Alert.alert("מגבלת גלריה", "ניתן לשמור עד 12 תמונות בגלריה.");
+      return;
+    }
+
+    const hasPermissions = await ensureMediaPermissions();
+    if (!hasPermissions) {
+      Alert.alert(
+        "אין הרשאות",
+        "אנא אפשרי גישה לגלריית התמונות כדי להעלות תמונות חדשות."
+      );
+      return;
+    }
+
+    try {
+      setGalleryUploading(true);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        selectionLimit: allowedSlots,
+        quality: 0.7,
+        base64: true,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const newItems = (result.assets || []).slice(0, allowedSlots).map((asset, index) => ({
+        id: `${Date.now()}-${asset.assetId || index}`,
+        uri: asset.base64
+          ? `data:${asset.mimeType || "image/jpeg"};base64,${asset.base64}`
+          : asset.uri,
+        width: asset.width,
+        height: asset.height,
+        uploadedAt: Date.now(),
+      }));
+
+      if (!newItems.length) {
+        Alert.alert("לא נוספו תמונות", "לא נבחרו תמונות חדשות להעלאה.");
+        return;
+      }
+
+      const updatedGallery = [
+        ...(business.galleryImages || []),
+        ...newItems,
+      ].slice(0, BUSINESS_GALLERY_LIMIT);
+
+      await updateDoc(doc(db, "businesses", business.id), {
+        galleryImages: updatedGallery,
+        galleryUpdatedAt: serverTimestamp(),
+      });
+
+      setBusiness((prev) => ({
+        ...prev,
+        galleryImages: updatedGallery,
+      }));
+      Alert.alert("עודכן", "הגלריה של העסק רועננה בהצלחה.");
+    } catch (error) {
+      console.error("שגיאה בהעלאת תמונות גלריה:", error);
+      Alert.alert("שגיאה", "לא הצלחנו להעלות את התמונות כרגע.");
+    } finally {
+      setGalleryUploading(false);
+    }
+  };
+
+  const handleRemoveGalleryImage = async (imageId) => {
+    if (!business?.id) {
+      return;
+    }
+
+    Alert.alert(
+      "הסרת תמונה",
+      "האם להסיר את התמונה מהגלריה?",
+      [
+        { text: "בטל", style: "cancel" },
+        {
+          text: "מחק",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setGalleryUploading(true);
+              const filtered = (business.galleryImages || []).filter(
+                (item) => item.id !== imageId
+              );
+              await updateDoc(doc(db, "businesses", business.id), {
+                galleryImages: filtered,
+                galleryUpdatedAt: serverTimestamp(),
+              });
+              setBusiness((prev) => ({
+                ...prev,
+                galleryImages: filtered,
+              }));
+            } catch (error) {
+              console.error("שגיאה במחיקת תמונת גלריה:", error);
+              Alert.alert("שגיאה", "לא הצלחנו להסיר את התמונה.");
+            } finally {
+              setGalleryUploading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const updateStatus = async (id, status) => {
     try {
       await updateDoc(doc(db, "appointments", id), { status });
@@ -110,6 +263,41 @@ export default function BusinessDashboard() {
       );
     } catch {
       Alert.alert("שגיאה", "לא ניתן לעדכן סטטוס.");
+    }
+  };
+
+  const handleAttendanceResponse = async (booking, attended) => {
+    if (!booking?.id) {
+      return;
+    }
+
+    try {
+      await updateDoc(doc(db, "appointments", booking.id), {
+        attendanceStatus: attended ? "arrived" : "no_show",
+        attendanceUpdatedAt: serverTimestamp(),
+      });
+
+      setBookings((prev) =>
+        prev.map((b) =>
+          b.id === booking.id
+            ? {
+                ...b,
+                attendanceStatus: attended ? "arrived" : "no_show",
+                attendanceUpdatedAt: new Date().toISOString(),
+              }
+            : b
+        )
+      );
+
+      Alert.alert(
+        "עודכן",
+        attended
+          ? "הלקוח סומן כמי שהגיע בזמן."
+          : "הלקוח סומן כלא הגיע – נשמור את זה למעקב הפנימי שלך."
+      );
+    } catch (error) {
+      console.error("שגיאה בעדכון סטטוס הגעה:", error);
+      Alert.alert("שגיאה", "לא ניתן לעדכן את הסטטוס כרגע.");
     }
   };
 
@@ -272,6 +460,56 @@ export default function BusinessDashboard() {
               ⏱️ מרווח תורים: כל {bookingIntervalMinutes} דקות
             </Text>
           </View>
+          <View style={styles.galleryHeaderRow}>
+            <View style={styles.galleryHeaderTextWrap}>
+              <Text style={styles.galleryTitle}>גלריית חוויה</Text>
+              <Text style={styles.gallerySubtitle}>
+                הציגו אווירה ותוצאות – הלקוחות יראו זאת בדף ההזמנה
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.galleryUploadButton, galleryUploading && styles.galleryUploadButtonDisabled]}
+              onPress={handleAddGalleryImages}
+              disabled={galleryUploading}
+            >
+              {galleryUploading ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <>
+                  <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
+                  <Text style={styles.galleryUploadText}>העלה תמונות</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+          {business?.galleryImages?.length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryScroll}
+            >
+              {business.galleryImages.map((item) => (
+                <View key={item.id} style={styles.galleryItem}>
+                  <Image source={{ uri: item.uri }} style={styles.galleryImage} />
+                  <TouchableOpacity
+                    style={styles.galleryRemove}
+                    onPress={() => handleRemoveGalleryImage(item.id)}
+                    disabled={galleryUploading}
+                  >
+                    <Ionicons name="close" size={16} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.galleryEmpty}>
+              <Ionicons name="images-outline" size={32} color="#a5a9c6" />
+              <Text style={styles.galleryEmptyTitle}>עוד אין תמונות בגלריה</Text>
+              <Text style={styles.galleryEmptySubtitle}>
+                הוסיפו לפחות תמונה אחת כדי ליצור חוויית הזמנה פרימיום
+              </Text>
+            </View>
+          )}
           <View style={styles.weeklyHoursContainer}>
             <Text style={styles.weeklyHoursTitle}>🕒 שעות פעילות</Text>
             {hasWeeklyHours ? (
@@ -357,6 +595,50 @@ export default function BusinessDashboard() {
                   </Text>
                   <Text style={styles.bookingDetail}>📞 {b.userPhone || "-"}</Text>
                   <Text style={styles.bookingDetail}>סטטוס: {b.status}</Text>
+
+                  {b.status !== "cancelled" && (
+                    <View style={styles.attendanceContainer}>
+                      <Text style={styles.attendanceLabel}>הלקוח הגיע?</Text>
+                      <View style={styles.attendanceButtons}>
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            b.attendanceStatus === "arrived" &&
+                              styles.attendanceButtonActive,
+                          ]}
+                          onPress={() => handleAttendanceResponse(b, true)}
+                        >
+                          <Text
+                            style={[
+                              styles.attendanceButtonText,
+                              b.attendanceStatus === "arrived" &&
+                                styles.attendanceButtonTextActive,
+                            ]}
+                          >
+                            הגיע
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.attendanceButton,
+                            styles.attendanceButtonOutlineDanger,
+                            b.attendanceStatus === "no_show" &&
+                              styles.attendanceButtonActiveDanger,
+                          ]}
+                          onPress={() => handleAttendanceResponse(b, false)}
+                        >
+                          <Text
+                            style={[
+                              styles.attendanceButtonText,
+                              styles.attendanceButtonTextDanger,
+                            ]}
+                          >
+                            לא הגיע
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
 
                   {b.status === "pending" && (
                     <View style={styles.row}>
@@ -461,6 +743,90 @@ const styles = StyleSheet.create({
     marginTop: 8,
     gap: 4,
   },
+  galleryHeaderRow: {
+    marginTop: 18,
+    flexDirection: "row-reverse",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  galleryHeaderTextWrap: {
+    flex: 1,
+    alignItems: "flex-end",
+  },
+  galleryTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#333",
+    textAlign: "right",
+  },
+  gallerySubtitle: {
+    fontSize: 12,
+    color: "#6a6f85",
+    textAlign: "right",
+    marginTop: 4,
+  },
+  galleryUploadButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#6C63FF",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    gap: 6,
+  },
+  galleryUploadButtonDisabled: {
+    opacity: 0.6,
+  },
+  galleryUploadText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  galleryScroll: {
+    flexDirection: "row",
+    paddingVertical: 16,
+    paddingLeft: 6,
+  },
+  galleryItem: {
+    width: 160,
+    height: 120,
+    borderRadius: 18,
+    overflow: "hidden",
+    marginLeft: 12,
+    backgroundColor: "#eef0ff",
+  },
+  galleryImage: {
+    width: "100%",
+    height: "100%",
+  },
+  galleryRemove: {
+    position: "absolute",
+    top: 8,
+    left: 8,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderRadius: 14,
+    padding: 4,
+  },
+  galleryEmpty: {
+    backgroundColor: "#f7f8ff",
+    borderRadius: 18,
+    padding: 20,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e3e8ff",
+    marginTop: 16,
+  },
+  galleryEmptyTitle: {
+    marginTop: 12,
+    fontWeight: "700",
+    color: "#3e3e63",
+  },
+  galleryEmptySubtitle: {
+    marginTop: 6,
+    color: "#6a6f85",
+    textAlign: "center",
+  },
   weeklyHoursContainer: {
     marginTop: 10,
     backgroundColor: "#f6f7fc",
@@ -528,6 +894,49 @@ const styles = StyleSheet.create({
   },
   bookingTime: { fontWeight: "700", fontSize: 16, textAlign: "right" },
   bookingDetail: { fontSize: 14, textAlign: "right", color: "#555" },
+  attendanceContainer: {
+    marginTop: 12,
+  },
+  attendanceLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "right",
+    color: "#3e3e63",
+    marginBottom: 6,
+  },
+  attendanceButtons: {
+    flexDirection: "row-reverse",
+    justifyContent: "flex-start",
+    alignItems: "center",
+  },
+  attendanceButton: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#6C63FF",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    marginHorizontal: 5,
+  },
+  attendanceButtonActive: {
+    backgroundColor: "#6C63FF",
+  },
+  attendanceButtonOutlineDanger: {
+    borderColor: "#F44336",
+  },
+  attendanceButtonActiveDanger: {
+    backgroundColor: "rgba(244,67,54,0.12)",
+  },
+  attendanceButtonText: {
+    color: "#6C63FF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  attendanceButtonTextActive: {
+    color: "#fff",
+  },
+  attendanceButtonTextDanger: {
+    color: "#F44336",
+  },
   row: { flexDirection: "row-reverse", marginTop: 8 },
   actionBtn: {
     flex: 1,
