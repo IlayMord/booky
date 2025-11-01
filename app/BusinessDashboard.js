@@ -32,17 +32,7 @@ import {
   getDisplayWeeklyHoursRows,
   sanitizeWeeklyHours,
 } from "../constants/weekdays";
-import {
-  CANCELLATION_FEE_AMOUNT,
-  getCancellationFeeReasonLabel,
-} from "../constants/fees";
-import { formatILS } from "../utils/currency";
-
-const MAX_GALLERY_IMAGES = 12;
-
-const MAX_GALLERY_IMAGES = 12;
-
-const BUSINESS_GALLERY_LIMIT = 12;
+import { BUSINESS_GALLERY_IMAGE_LIMIT } from "../constants/businessGallery";
 
 const clampBookingInterval = (value) => {
   const parsed = Number(value);
@@ -158,7 +148,7 @@ export default function BusinessDashboard() {
 
     const allowedSlots = Math.max(
       0,
-      BUSINESS_GALLERY_LIMIT - (business.galleryImages?.length || 0)
+      BUSINESS_GALLERY_IMAGE_LIMIT - (business.galleryImages?.length || 0)
     );
     if (allowedSlots === 0) {
       Alert.alert("מגבלת גלריה", "ניתן לשמור עד 12 תמונות בגלריה.");
@@ -206,7 +196,7 @@ export default function BusinessDashboard() {
       const updatedGallery = [
         ...(business.galleryImages || []),
         ...newItems,
-      ].slice(0, BUSINESS_GALLERY_LIMIT);
+      ].slice(0, BUSINESS_GALLERY_IMAGE_LIMIT);
 
       await updateDoc(doc(db, "businesses", business.id), {
         galleryImages: updatedGallery,
